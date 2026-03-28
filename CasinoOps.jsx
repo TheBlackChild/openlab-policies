@@ -757,6 +757,7 @@ function Dashboard({ user, tables, staff, incidents, fills, activity, onNavigate
   const { title, stats } = roleData[user.role] || roleData.management;
 
   return (
+    <>
     <div>
       <div className="section-header mb-20">
         <div>
@@ -853,6 +854,7 @@ function Dashboard({ user, tables, staff, incidents, fills, activity, onNavigate
           </div>
         </div>
       )}
+    </>
   );
 }
 
@@ -2426,6 +2428,7 @@ function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpd
     }
 
     return (
+      <>
       <div>
         <div className="flex gap-8 mb-16" style={{ justifyContent:"flex-end" }}>
           <button className="btn btn-outline" onClick={() => printHouseOpenForm(tables, chips)}>🖨 House Open Summary</button>
@@ -2612,6 +2615,7 @@ function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpd
             </div>
           </div>
         )}
+      </>
     );
   }
 
