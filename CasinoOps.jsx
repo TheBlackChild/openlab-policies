@@ -737,24 +737,28 @@ function Dashboard({ user, tables, staff, incidents, fills, activity, onNavigate
     })(),
     staff: (() => {
       const myProfile  = staff.find(s => s.id === user.staffId);
-      const myTbl      = tables.find(t => t.dealerId === myProfile?.id);
+      const myTbl      = tables.find(t => t.dealerId === myProfile?.id) || tables.find(t => t.inspectorId === myProfile?.id);
       const myTxns     = (txns).filter(t => myTbl && t.tableId === myTbl.id);
       const myDrop     = myTxns.filter(t=>t.type==="drop").reduce((s,t)=>s+t.amount,0);
       const myWin      = myTxns.filter(t=>t.type==="win").reduce((s,t) =>s+t.amount,0);
       const myNet      = myDrop - myWin;
+      const myIncidents= (incidents||[]).filter(i => myTbl && i.tableId === myTbl.id && i.status!=="resolved");
       return {
-        title: "Table Operations",
+        title: `Table Operations${myTbl ? ` — ${myTbl.id}` : ""}`,
         stats: [
-          { label: "My Table",         value: myTbl ? myTbl.id : "None",        sub: myTbl ? `${myTbl.gameType}` : "Not assigned",   icon: "🃏", accent: "var(--gold)",   page: "table_session" },
-          { label: "Session Net",      value: myDrop>0 ? fmt(myNet) : "No data", sub: "House net this session",                        icon: "📈", accent: myNet>=0?"var(--green)":"var(--red)", page: "table_session" },
-          { label: "Customers",        value: String([...new Set(myTxns.map(t=>t.customerId))].length), sub: "Active at my table",     icon: "👥", accent: "var(--blue)",   page: "customer_log" },
-          { label: "Chip Float",       value: myTbl ? fmt(myTbl.chipTotal) : "—", sub: "Current table float",                          icon: "🪙", accent: "var(--yellow)", page: "table_session" },
-        ]
+          { label: "My Table",         value: myTbl ? myTbl.id : "None",         sub: myTbl ? `${myTbl.gameType}` : "Not assigned",   icon: "🃏", accent: "var(--gold)",   page: "table_session" },
+          { label: "Session Net",      value: myDrop>0 ? fmt(myNet) : "No data",  sub: "House net this session",                        icon: "📈", accent: myNet>=0?"var(--green)":"var(--red)", page: "table_session" },
+          { label: "Customers",        value: String([...new Set(myTxns.map(t=>t.customerId))].filter(Boolean).length), sub: "Active at my table", icon: "👥", accent: "var(--blue)", page: "table_session" },
+          { label: "Open Incidents",   value: String(myIncidents.length),          sub: "At my table",                                   icon: "⚠️", accent: "var(--red)",    page: "incidents" },
+        ],
+        myTbl, myTxns, myIncidents,
       };
     })(),
   };
 
-  const { title, stats } = roleData[user.role] || roleData.management;
+  const roleEntry = roleData[user.role] || roleData.management;
+  const { title, stats } = roleEntry;
+  const staffTableData = user.role === "staff" ? roleEntry : null;
 
   return (
     <>
@@ -777,6 +781,59 @@ function Dashboard({ user, tables, staff, incidents, fills, activity, onNavigate
           </div>
         ))}
       </div>
+
+      {/* ── STAFF TABLE ACTIVITY SUMMARY ── */}
+      {staffTableData?.myTbl && (
+        <div style={{ marginBottom:"1.5rem" }}>
+          <div className="card" style={{ marginBottom:"1rem" }}>
+            <div className="card-header">
+              <div className="card-title">Table {staffTableData.myTbl.id} — Activity Summary</div>
+              <button className="btn btn-sm btn-gold" onClick={() => onNavigate("table_session")}>Open Session →</button>
+            </div>
+            <div className="card-body">
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:"1rem", marginBottom:"1rem" }}>
+                {[
+                  { label:"Game Type",       value: staffTableData.myTbl.gameType },
+                  { label:"Status",          value: staffTableData.myTbl.status.toUpperCase() },
+                  { label:"Opening Float",   value: fmt(staffTableData.myTbl.openingFloat||staffTableData.myTbl.floatCapacity||0) },
+                  { label:"Current Chips",   value: fmt(staffTableData.myTbl.chipTotal||0) },
+                  { label:"Total Drop",      value: staffTableData.myTxns.filter(t=>t.type==="drop").length > 0 ? fmt(staffTableData.myTxns.filter(t=>t.type==="drop").reduce((s,t)=>s+t.amount,0)) : "No data" },
+                  { label:"Unique Customers",value: String([...new Set(staffTableData.myTxns.map(t=>t.customerId))].filter(Boolean).length) },
+                ].map(item => (
+                  <div key={item.label} style={{ background:"var(--bg3)", padding:"0.6rem 0.9rem", borderRadius:"var(--radius)" }}>
+                    <div style={{ fontSize:"0.7rem", color:"var(--text3)", textTransform:"uppercase", marginBottom:"0.2rem" }}>{item.label}</div>
+                    <div style={{ fontWeight:600, fontSize:"0.95rem" }}>{item.value}</div>
+                  </div>
+                ))}
+              </div>
+              {/* Customer Records */}
+              {staffTableData.myTxns.length > 0 && (
+                <div style={{ marginTop:"0.75rem" }}>
+                  <div style={{ fontSize:"0.8rem", color:"var(--text2)", fontWeight:600, marginBottom:"0.5rem" }}>Recent Customer Activity</div>
+                  <div style={{ display:"flex", flexDirection:"column", gap:"0.3rem", maxHeight:"140px", overflowY:"auto" }}>
+                    {staffTableData.myTxns.slice(0,8).map(t => (
+                      <div key={t.id} style={{ display:"flex", justifyContent:"space-between", fontSize:"0.8rem", padding:"0.3rem 0.5rem", background:"var(--panel)", borderRadius:"var(--radius)" }}>
+                        <span style={{ color:"var(--text2)" }}>{t.customerId||"—"}</span>
+                        <span style={{ color:"var(--text3)" }}>{t.time}</span>
+                        <span style={{ color:t.type==="drop"?"var(--green)":"var(--red)", fontFamily:"var(--font-mono)" }}>{t.type==="drop"?"+":"-"}{fmt(t.amount)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* Open Incidents */}
+              {staffTableData.myIncidents.length > 0 && (
+                <div style={{ marginTop:"0.75rem", padding:"0.6rem 0.9rem", background:"var(--red-dim)", borderRadius:"var(--radius)", border:"1px solid var(--red)" }}>
+                  <div style={{ fontSize:"0.8rem", fontWeight:600, color:"var(--red)", marginBottom:"0.3rem" }}>⚠ {staffTableData.myIncidents.length} Open Incident{staffTableData.myIncidents.length>1?"s":""}</div>
+                  {staffTableData.myIncidents.slice(0,3).map(i => (
+                    <div key={i.id} style={{ fontSize:"0.78rem", color:"var(--text2)", marginTop:"0.2rem" }}>{i.type}: {i.description}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid-2 gap-16">
         {/* Activity Timeline */}
@@ -2046,7 +2103,7 @@ function IncidentsPage({ incidents, user, tables, onAddIncident, onUpdateInciden
   );
 }
 
-function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpdateTable, staff, tableTransfers, onAddTransfer, cageReserve, onSetCageReserve, rolePermissions }) {
+function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpdateTable, staff, tableTransfers, onAddTransfer, cageReserve, onSetCageReserve, rolePermissions, halls, onAddChipCount, chipCountLog }) {
   const [tab, setTab] = useState("fills");
   const canRequest = hasPermission(user.role, "request_fills", rolePermissions);
   const canApprove = hasPermission(user.role, "approve_fills", rolePermissions);
@@ -2393,6 +2450,132 @@ function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpd
   }
 
   // ── HOUSE OPEN / CLOSE TAB ────────────────────────────────────────────────
+  // ── HALL OPEN / CLOSE TAB (Pit Boss) ─────────────────────────────────────
+  function HallTab() {
+    const myStaff = staff.find(s => s.id === user.staffId);
+    const myHallId = myStaff?.hallId;
+    const myHall = halls?.find(h => h.id === myHallId);
+    const hallTables = tables.filter(t => t.hallId === myHallId);
+    const [hallStatus, setHallStatus] = useState(hallTables.some(t => t.status !== "closed") ? "open" : "closed");
+    const [closeCounts, setCloseCounts] = useState({});   // tableId → { chipId → qty }
+    const [closeMode, setCloseMode] = useState(false);
+    const [savedLog, setSavedLog] = useState([]);
+    const fmtK = n => n != null ? n.toLocaleString("en-KE",{style:"currency",currency:"KES",minimumFractionDigits:0}) : "—";
+
+    function openHall() {
+      hallTables.forEach(t => { if (t.status === "closed") onUpdateTable(t.id, { status: "open", openedAt: new Date().toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"}), openedDate: new Date().toLocaleDateString("en-KE",{day:"2-digit",month:"2-digit",year:"2-digit"}) }); });
+      setHallStatus("open");
+    }
+
+    function submitHallClose() {
+      const now = new Date().toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"});
+      hallTables.forEach(t => {
+        const tCounts = closeCounts[t.id] || {};
+        const chipTotal = (chips||[]).reduce((s,c) => s + c.value*(tCounts[c.id]||0), 0);
+        if (chipTotal > 0) {
+          onUpdateTable(t.id, { chipTotal, status: "closed" });
+          if (onAddChipCount) onAddChipCount({ tableId: t.id, prevFloat: t.chipTotal||0, newFloat: chipTotal, diff: chipTotal-(t.chipTotal||0), inspector: myStaff?.name||"Pit Boss" });
+        } else {
+          onUpdateTable(t.id, { status: "closed" });
+        }
+      });
+      const entry = { id: Date.now(), time: now, hallId: myHallId, hallName: myHall?.name||myHallId, tableCount: hallTables.length, tables: hallTables.map(t => { const tc = closeCounts[t.id]||{}; const total = (chips||[]).reduce((s,c)=>s+c.value*(tc[c.id]||0),0); return { id:t.id, name:t.tableName||t.id, chipTotal: total }; }) };
+      setSavedLog(l => [entry, ...l]);
+      setHallStatus("closed");
+      setCloseMode(false);
+      setCloseCounts({});
+    }
+
+    return (
+      <div>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"1rem" }}>
+          <div>
+            <div style={{ fontSize:"1.1rem", fontWeight:700 }}>{myHall?.name || "Your Hall"}</div>
+            <div style={{ color:"var(--text2)", fontSize:"0.85rem" }}>{hallTables.length} tables · Status: <span style={{ color: hallStatus==="open"?"var(--green)":"var(--text3)", fontWeight:600 }}>{hallStatus.toUpperCase()}</span></div>
+          </div>
+          <div style={{ display:"flex", gap:"0.5rem" }}>
+            {hallStatus === "closed" && <button className="btn btn-gold" onClick={openHall}>🟢 Open Hall</button>}
+            {hallStatus === "open" && !closeMode && <button className="btn btn-outline" style={{borderColor:"var(--red)",color:"var(--red)"}} onClick={() => setCloseMode(true)}>🔴 Close Hall & Record Chips</button>}
+          </div>
+        </div>
+
+        {closeMode && (
+          <div style={{ background:"var(--panel)", border:"1px solid var(--border)", borderRadius:"var(--radius2)", padding:"1.5rem", marginBottom:"1rem" }}>
+            <div style={{ fontWeight:600, color:"var(--gold)", marginBottom:"1rem" }}>Record Chip Count per Table at Close</div>
+            {hallTables.map(t => {
+              const tCounts = closeCounts[t.id] || {};
+              const total = (chips||[]).reduce((s,c)=>s+c.value*(tCounts[c.id]||0),0);
+              return (
+                <div key={t.id} style={{ marginBottom:"1rem", padding:"1rem", background:"var(--bg3)", borderRadius:"var(--radius)" }}>
+                  <div style={{ fontWeight:600, marginBottom:"0.5rem" }}>{t.tableName||t.id} <span style={{color:"var(--text3)",fontWeight:400,fontSize:"0.8rem"}}>{t.gameType}</span></div>
+                  <div style={{ display:"flex", flexWrap:"wrap", gap:"0.75rem" }}>
+                    {(chips||[]).map(c => (
+                      <div key={c.id} style={{ display:"flex", alignItems:"center", gap:"0.4rem" }}>
+                        <div style={{ width:14, height:14, borderRadius:"50%", background:c.hex, border:"1px solid rgba(255,255,255,0.2)" }} />
+                        <span style={{ fontSize:"0.8rem", color:"var(--text2)" }}>{c.color}</span>
+                        <input type="number" min="0" placeholder="0" value={tCounts[c.id]||""}
+                          onChange={e => setCloseCounts(cc => ({ ...cc, [t.id]: { ...(cc[t.id]||{}), [c.id]: Number(e.target.value) } }))}
+                          style={{ width:60, background:"var(--panel2)", border:"1px solid var(--border)", color:"var(--text)", padding:"0.25rem 0.4rem", borderRadius:"var(--radius)", textAlign:"center", fontSize:"0.8rem" }} />
+                      </div>
+                    ))}
+                    <span style={{ marginLeft:"auto", fontFamily:"var(--font-mono)", color:"var(--gold)", fontSize:"0.9rem" }}>{fmtK(total)}</span>
+                  </div>
+                </div>
+              );
+            })}
+            <div style={{ display:"flex", gap:"0.5rem", marginTop:"0.5rem" }}>
+              <button className="btn btn-gold" onClick={submitHallClose}>✓ Confirm Close & Log</button>
+              <button className="btn btn-outline" onClick={() => setCloseMode(false)}>Cancel</button>
+            </div>
+          </div>
+        )}
+
+        <div style={{ background:"var(--panel)", border:"1px solid var(--border)", borderRadius:"var(--radius2)", overflow:"hidden" }}>
+          <div style={{ padding:"0.75rem 1rem", borderBottom:"1px solid var(--border)", fontWeight:600, fontSize:"0.9rem" }}>Table Status</div>
+          <table style={{ width:"100%", borderCollapse:"collapse" }}>
+            <thead><tr style={{ borderBottom:"1px solid var(--border)" }}>
+              {["Table","Game","Status","Opening Float","Current Chips","Result"].map(h => <th key={h} style={{ padding:"0.5rem 0.75rem", textAlign:"left", color:"var(--text2)", fontSize:"0.75rem", fontWeight:500 }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {hallTables.map(t => {
+                const result = (t.chipTotal||0) - (t.openingFloat||t.floatCapacity||0);
+                return (
+                  <tr key={t.id} style={{ borderBottom:"1px solid var(--border2)" }}>
+                    <td style={{ padding:"0.5rem 0.75rem", fontWeight:600 }}>{t.tableName||t.id}</td>
+                    <td style={{ padding:"0.5rem 0.75rem", color:"var(--text2)", fontSize:"0.85rem" }}>{t.gameType}</td>
+                    <td style={{ padding:"0.5rem 0.75rem" }}><StatusBadge status={t.status} /></td>
+                    <td style={{ padding:"0.5rem 0.75rem", fontFamily:"var(--font-mono)", fontSize:"0.85rem" }}>{fmtK(t.openingFloat||t.floatCapacity||0)}</td>
+                    <td style={{ padding:"0.5rem 0.75rem", fontFamily:"var(--font-mono)", fontSize:"0.85rem", color:"var(--gold)" }}>{fmtK(t.chipTotal||0)}</td>
+                    <td style={{ padding:"0.5rem 0.75rem", fontFamily:"var(--font-mono)", fontSize:"0.85rem", fontWeight:600, color:result>=0?"var(--green)":"var(--red)" }}>{result>=0?"+":""}{fmtK(result)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {savedLog.length > 0 && (
+          <div style={{ marginTop:"1.5rem" }}>
+            <div style={{ fontWeight:600, marginBottom:"0.75rem" }}>Hall Close Log</div>
+            {savedLog.map(entry => (
+              <div key={entry.id} style={{ background:"var(--panel)", border:"1px solid var(--border)", borderRadius:"var(--radius)", padding:"0.75rem 1rem", marginBottom:"0.5rem" }}>
+                <div style={{ display:"flex", justifyContent:"space-between" }}>
+                  <span style={{ fontWeight:600 }}>{entry.hallName}</span>
+                  <span style={{ color:"var(--text2)", fontSize:"0.8rem" }}>Closed at {entry.time}</span>
+                </div>
+                <div style={{ display:"flex", gap:"1rem", marginTop:"0.4rem", flexWrap:"wrap" }}>
+                  {entry.tables.map(t => (
+                    <span key={t.id} style={{ fontSize:"0.8rem", color:"var(--text2)" }}>{t.name}: <span style={{ color:"var(--gold)", fontFamily:"var(--font-mono)" }}>{fmtK(t.chipTotal)}</span></span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   function HouseTab() {
     const [chipCounts, setChipCounts] = useState({});
     const [tableFormModal, setTableFormModal] = useState(null); // { table, mode: "open"|"close" }
@@ -2805,6 +2988,7 @@ function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpd
 
   const TABS = [
     { key:"fills",    label:"Fill Requests",        show: true },
+    { key:"hall",     label:"Hall Open / Close",    show: user.role === "pit_boss" },
     { key:"house",    label:"House Open / Close",   show: canAll },
     { key:"transfer", label:"Table-to-Table",       show: canRequest || canAll },
   ].filter(t => t.show);
@@ -2818,6 +3002,7 @@ function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpd
         {TABS.map(t => <div key={t.key} className={`tab-item ${tab===t.key?"active":""}`} onClick={()=>setTab(t.key)}>{t.label}</div>)}
       </div>
       {tab === "fills"    && <FillRequestsTab />}
+      {tab === "hall"     && <HallTab />}
       {tab === "house"    && <HouseTab />}
       {tab === "transfer" && <TransferTab />}
     </div>
@@ -3801,7 +3986,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
     "manage_breaklist","open_close_tables","request_fills","approve_fills",
     "report_incidents","resolve_incidents","perform_chip_count","log_customer","dealer_rotation",
   ],
-  management:    ["view_dashboard","view_floor","view_reports","view_roster","resolve_incidents","report_incidents","configure_halls","configure_tables","configure_chips","generate_roster"],
+  management:    ["view_dashboard","view_floor","view_reports","view_roster","resolve_incidents","report_incidents","configure_halls","configure_tables","configure_chips","configure_shifts","generate_roster","record_attendance","assign_halls","assign_tables","manage_breaklist","open_close_tables","request_fills","approve_fills","perform_chip_count","log_customer","dealer_rotation"],
   shift_manager: ["view_dashboard","view_floor","view_reports","view_roster","record_attendance","assign_halls","assign_tables","open_close_tables","approve_fills","report_incidents","resolve_incidents"],
   pit_boss:      ["view_dashboard","view_floor","manage_breaklist","assign_tables","open_close_tables","request_fills","report_incidents"],
   staff:         ["view_dashboard","perform_chip_count","log_customer","dealer_rotation"],
@@ -4019,28 +4204,62 @@ function AdminPage({ users, onAddUser, onUpdateUser, onDeleteUser, halls, onAddH
   // ── USER MODAL ──
   function UserModal({ data, onClose }) {
     const editing = !!data;
-    const [form, setForm] = useState(data || { name: "", email: "", password: "", role: "staff", active: true });
+    const [form, setForm] = useState(data || { name: "", empNo: "", email: "", role: "staff", active: true });
+    const [staffErr, setStaffErr] = useState("");
+
+    // Available roles: system_admin can create any; management can create all except system_admin
+    const currentUserRole = rolePermissions ? Object.keys(rolePermissions)[0] : "system_admin";
+    const availableRoles = ["management","shift_manager","pit_boss","staff"];
+
+    function selectStaff(s) {
+      setForm(f => ({ ...f, name: s.name, empNo: s.empNo, staffId: s.id }));
+      setStaffErr("");
+    }
+
     function save() {
-      if (!form.name || !form.email) return;
-      editing ? onUpdateUser(form) : onAddUser(form);
+      if (!form.name || !form.empNo) { setStaffErr("Select a staff record first."); return; }
+      const matched = staff.find(s => s.name === form.name && s.empNo === form.empNo);
+      if (!matched && !editing) { setStaffErr("Name and employee number must match an existing staff record."); return; }
+      // password = empNo (employee number is used as password)
+      const toSave = { ...form, password: form.empNo, staffId: matched?.id || form.staffId || null };
+      editing ? onUpdateUser(toSave) : onAddUser(toSave);
       onClose();
     }
+
+    const unlinkedStaff = staff.filter(s => !editing || s.empNo === data?.empNo);
+
     return (
       <div className="modal-overlay" onClick={onClose}>
-        <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modal modal-lg" onClick={e => e.stopPropagation()}>
           <div className="modal-header">
             <div className="modal-title">{editing ? "Edit User" : "Create User"}</div>
             <button className="modal-close" onClick={onClose}>✕</button>
           </div>
           <div className="modal-body">
-            <div className="form-group"><label className="form-label">Full Name</label><input className="form-input" value={form.name} onChange={e => setForm(f=>({...f,name:e.target.value}))} placeholder="Full Name" /></div>
-            <div className="form-group"><label className="form-label">Email</label><input className="form-input" value={form.email} onChange={e => setForm(f=>({...f,email:e.target.value}))} placeholder="email@casino.com" /></div>
-            {!editing && <div className="form-group"><label className="form-label">Password</label><input className="form-input" type="password" value={form.password} onChange={e => setForm(f=>({...f,password:e.target.value}))} /></div>}
+            {!editing && (
+              <div className="form-group">
+                <label className="form-label">Select Staff Record <span style={{color:"var(--red)",fontSize:"0.75rem"}}>*required</span></label>
+                <select className="form-select" value={form.empNo} onChange={e => { const s = staff.find(x => x.empNo === e.target.value); if (s) selectStaff(s); }}>
+                  <option value="">— Choose staff member —</option>
+                  {unlinkedStaff.map(s => <option key={s.id} value={s.empNo}>{s.name} · {s.empNo} · {s.position}</option>)}
+                </select>
+                {staffErr && <div style={{color:"var(--red)",fontSize:"0.8rem",marginTop:"0.3rem"}}>{staffErr}</div>}
+              </div>
+            )}
+            <div style={{display:"flex",gap:"1rem"}}>
+              <div className="form-group" style={{flex:1}}><label className="form-label">Full Name</label><input className="form-input" value={form.name} readOnly={!editing} onChange={e => setForm(f=>({...f,name:e.target.value}))} /></div>
+              <div className="form-group" style={{flex:1}}>
+                <label className="form-label">Employee No. <span style={{color:"var(--text3)",fontSize:"0.75rem"}}>(= password)</span></label>
+                <input className="form-input" value={form.empNo} readOnly={!editing} onChange={e => setForm(f=>({...f,empNo:e.target.value}))} />
+              </div>
+            </div>
+            <div className="form-group"><label className="form-label">Email (optional)</label><input className="form-input" value={form.email||""} onChange={e => setForm(f=>({...f,email:e.target.value}))} placeholder="email@casino.com" /></div>
             <div className="form-group">
               <label className="form-label">Role</label>
               <select className="form-select" value={form.role} onChange={e => setForm(f=>({...f,role:e.target.value}))}>
-                {["system_admin","management","shift_manager","pit_boss","staff"].map(r => <option key={r} value={r}>{r.replace(/_/g," ").toUpperCase()}</option>)}
+                {availableRoles.map(r => <option key={r} value={r}>{r.replace(/_/g," ").toUpperCase()}</option>)}
               </select>
+              <div style={{fontSize:"0.75rem",color:"var(--text3)",marginTop:"0.25rem"}}>Employee number is used as login password. System Admin role is locked.</div>
             </div>
             {editing && (
               <div className="form-group">
@@ -4053,7 +4272,7 @@ function AdminPage({ users, onAddUser, onUpdateUser, onDeleteUser, halls, onAddH
           </div>
           <div className="modal-footer">
             <button className="btn btn-outline" onClick={onClose}>Cancel</button>
-            <button className="btn btn-gold" onClick={save} disabled={!form.name||!form.email}>{editing ? "Save Changes" : "Create User"}</button>
+            <button className="btn btn-gold" onClick={save} disabled={!form.name||!form.empNo}>{editing ? "Save Changes" : "Create User"}</button>
           </div>
         </div>
       </div>
@@ -4524,16 +4743,23 @@ function TableSessionPage({ user, staff, tables, chips, transactions, onUpdateTa
   const timerPct   = (secondsLeft / ROTATION_SECS) * 100;
   const timerColor = secondsLeft > 300 ? "var(--green)" : secondsLeft > 60 ? "var(--yellow)" : "var(--red)";
 
+  // ── SESSION STATE ──
+  const [sessionStarted, setSessionStarted] = useState(myTable?.status === "open");
+  const [sessionNumber, setSessionNumber] = useState(1);
+
   // ── ROTATION / CHIP COUNT FLOW ──
   const [rotationStep, setRotationStep] = useState(null);
   const [counts, setCounts] = useState({});
   const [sessionLog, setSessionLog] = useState([]);
+  // incoming dealer/inspector selection for confirm step
+  const [incomingDealerId, setIncomingDealerId]     = useState("");
+  const [incomingInspectorId, setIncomingInspectorId] = useState("");
 
   const total = (chips||[]).reduce((sum, c) => sum + c.value * (counts[c.id] || 0), 0);
   const prev  = myTable?.chipTotal || 0;
   const diff  = total - prev;
 
-  function startRotation() { setRotationStep("chip_count"); setCounts({}); setSessionTab("session"); }
+  function startRotation() { setRotationStep("chip_count"); setCounts({}); setIncomingDealerId(""); setIncomingInspectorId(""); setSessionTab("session"); }
 
   function submitChipCount() {
     if (!total) return;
@@ -4542,11 +4768,18 @@ function TableSessionPage({ user, staff, tables, chips, transactions, onUpdateTa
 
   function confirmRotation() {
     if (myTable) {
-      onUpdateTable(myTable.id, { chipTotal: total });
+      // Update table with new chip total and incoming dealer/inspector if selected
+      const updates = { chipTotal: total };
+      if (incomingDealerId) updates.dealerId = incomingDealerId;
+      if (incomingInspectorId) updates.inspectorId = incomingInspectorId;
+      onUpdateTable(myTable.id, updates);
       const now = new Date().toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"});
-      const result = { id: Date.now(), time: now, tableId: myTable.id, prevFloat: prev, newFloat: total, diff, inspector: myInspector?.name || "—" };
+      const incomingDealer = incomingDealerId ? staff.find(s=>s.id===incomingDealerId) : null;
+      const incomingInspector = incomingInspectorId ? staff.find(s=>s.id===incomingInspectorId) : null;
+      const result = { id: Date.now(), sessionNo: sessionNumber, time: now, tableId: myTable.id, prevFloat: prev, newFloat: total, diff, inspector: myInspector?.name || "—", outDealer: user.name, inDealer: incomingDealer?.name||"—", outInspector: myInspector?.name||"—", inInspector: incomingInspector?.name||"—" };
       setSessionLog(sl => [result, ...sl]);
-      onAddActivity("dealer_rotation", `Rotation at ${myTable.id} — ${diff>=0?"Win":"Loss"} ${fmt(Math.abs(diff))}`, "🔄");
+      setSessionNumber(n => n + 1);
+      onAddActivity("dealer_rotation", `Session ${sessionNumber} at ${myTable.id} — ${diff>=0?"Win":"Loss"} ${fmt(Math.abs(diff))}`, "🔄");
       if (onAddChipCount) {
         onAddChipCount({ tableId: myTable.id, prevFloat: prev, newFloat: total, diff, inspector: myInspector?.name || "—" });
       }
@@ -4615,11 +4848,44 @@ function TableSessionPage({ user, staff, tables, chips, transactions, onUpdateTa
     </div>
   );
 
-  return (
+  // ── START SESSION GATE ──
+  if (!sessionStarted) return (
     <div>
       <div className="section-header">
         <div>
           <div className="section-title">Table Session — <span className="text-gold">{myTable.id}</span></div>
+          <div className="section-sub">{myTable.gameType}{myTable.tableName ? ` · ${myTable.tableName}` : ""} · {myHall?.name?.split("—")[0]?.trim()||""}</div>
+        </div>
+        <StatusBadge status={myTable.status} />
+      </div>
+      <div style={{ maxWidth:480, margin:"3rem auto", textAlign:"center", padding:"2rem", background:"var(--panel)", border:"1px solid var(--border)", borderRadius:"var(--radius2)" }}>
+        <div style={{ fontSize:"3rem", marginBottom:"1rem" }}>🃏</div>
+        <div style={{ fontSize:"1.3rem", fontWeight:700, marginBottom:"0.5rem" }}>Session #{sessionNumber}</div>
+        <div style={{ color:"var(--text2)", marginBottom:"0.5rem" }}>{myTable.tableName||myTable.id} · {myTable.gameType}</div>
+        <div style={{ color:"var(--text3)", fontSize:"0.85rem", marginBottom:"1.5rem" }}>Inspector: {myInspector?.name||"Unassigned"} · Float: {fmt(myTable.chipTotal||0)}</div>
+        <div style={{ display:"flex", gap:"0.75rem", justifyContent:"center", flexWrap:"wrap", marginBottom:"1.5rem" }}>
+          {[
+            { label:"Outgoing Dealer", value: user.name, color:"var(--red)" },
+            { label:"Inspector",       value: myInspector?.name||"Unassigned", color:"var(--blue)" },
+          ].map(r => (
+            <div key={r.label} style={{ background:"var(--bg3)", padding:"0.75rem 1.25rem", borderRadius:"var(--radius)", border:`1px solid ${r.color}22` }}>
+              <div style={{ fontSize:"0.7rem", color:"var(--text3)", textTransform:"uppercase", marginBottom:"0.25rem" }}>{r.label}</div>
+              <div style={{ fontWeight:600, color:r.color }}>{r.value}</div>
+            </div>
+          ))}
+        </div>
+        <button className="btn btn-gold" style={{ padding:"0.75rem 2rem", fontSize:"1rem" }} onClick={() => { setSessionStarted(true); setTimerRunning(true); onAddActivity("session_start", `Session ${sessionNumber} started at ${myTable.id}`, "▶️"); }}>
+          ▶ Start Session #{sessionNumber}
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Table Session — <span className="text-gold">{myTable.id}</span> <span style={{ fontSize:"0.8rem", color:"var(--text3)", fontWeight:400 }}>Session #{sessionNumber}</span></div>
           <div className="section-sub">{myTable.gameType}{myTable.tableName ? ` · ${myTable.tableName}` : ""} · {myHall?.name?.split("—")[0]?.trim()||""} · Inspector: {myInspector?.name||"Unassigned"}</div>
         </div>
         <div className="flex gap-8">
@@ -4719,26 +4985,40 @@ function TableSessionPage({ user, staff, tables, chips, transactions, onUpdateTa
       {rotationStep === "confirm" && (
         <div>
           <div style={{ padding:"12px 16px", background:"var(--gold-dim)", border:"1px solid var(--border)", borderRadius:"var(--radius)", marginBottom:16 }}>
-            <div style={{ fontWeight:600, color:"var(--gold)" }}>🔄 Rotation — Step 3 of 3: Confirm</div>
+            <div style={{ fontWeight:600, color:"var(--gold)" }}>🔄 Session {sessionNumber} — Step 3 of 3: Confirm Rotation</div>
           </div>
           <div className="card">
-            <div className="card-header"><div className="card-title">Confirm Dealer Rotation</div></div>
+            <div className="card-header"><div className="card-title">Confirm Incoming Dealer & Inspector</div></div>
             <div className="card-body">
-              <div style={{ display:"grid", gridTemplateColumns:"1fr auto 1fr", gap:16, alignItems:"center", padding:"20px 0", textAlign:"center" }}>
+              {/* Outgoing / Incoming layout */}
+              <div style={{ display:"grid", gridTemplateColumns:"1fr auto 1fr", gap:16, alignItems:"flex-start", padding:"12px 0 20px", textAlign:"center" }}>
                 <div style={{ padding:16, background:"var(--red-dim)", borderRadius:"var(--radius)", border:"1px solid rgba(232,65,90,0.3)" }}>
-                  <div style={{ fontSize:11, color:"var(--text3)", marginBottom:8 }}>OUTGOING</div>
+                  <div style={{ fontSize:11, color:"var(--text3)", marginBottom:8 }}>OUTGOING DEALER</div>
                   <div className="avatar" style={{ margin:"0 auto 8px", width:40, height:40, fontSize:16 }}>{user.name.charAt(0)}</div>
                   <div style={{ fontWeight:600 }}>{user.name}</div>
                   <div style={{ fontSize:11, color:"var(--text3)", marginTop:4 }}>Leaving {myTable.id}</div>
-                </div>
-                <div style={{ fontSize:28, color:"var(--gold)" }}>→</div>
-                <div style={{ padding:16, background:"var(--green-dim)", borderRadius:"var(--radius)", border:"1px solid rgba(45,190,108,0.3)" }}>
-                  <div style={{ fontSize:11, color:"var(--text3)", marginBottom:8 }}>INCOMING</div>
-                  <div className="avatar" style={{ margin:"0 auto 8px", width:40, height:40, fontSize:16, background:"var(--green-dim)", borderColor:"var(--green)", color:"var(--green)" }}>
-                    {(hallDealers.find(s=>s.id!==myStaffProfile?.id)?.name||"?").charAt(0)}
+                  <div style={{ marginTop:12, paddingTop:12, borderTop:"1px solid rgba(232,65,90,0.2)" }}>
+                    <div style={{ fontSize:11, color:"var(--text3)", marginBottom:4 }}>OUTGOING INSPECTOR</div>
+                    <div style={{ fontWeight:600, color:"var(--text2)" }}>{myInspector?.name||"Unassigned"}</div>
                   </div>
-                  <div style={{ fontWeight:600 }}>{hallDealers.find(s=>s.id!==myStaffProfile?.id)?.name||"Next dealer"}</div>
+                </div>
+                <div style={{ fontSize:28, color:"var(--gold)", paddingTop:24 }}>→</div>
+                <div style={{ padding:16, background:"var(--green-dim)", borderRadius:"var(--radius)", border:"1px solid rgba(45,190,108,0.3)" }}>
+                  <div style={{ fontSize:11, color:"var(--text3)", marginBottom:8 }}>INCOMING DEALER</div>
+                  <select value={incomingDealerId} onChange={e=>setIncomingDealerId(e.target.value)}
+                    style={{ width:"100%", background:"var(--panel2)", border:"1px solid var(--border)", color:"var(--text)", padding:"0.4rem 0.5rem", borderRadius:"var(--radius)", fontSize:"0.85rem", marginBottom:8 }}>
+                    <option value="">— Select Dealer —</option>
+                    {hallDealers.filter(s=>s.id!==myStaffProfile?.id).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
                   <div style={{ fontSize:11, color:"var(--text3)", marginTop:4 }}>Taking {myTable.id}</div>
+                  <div style={{ marginTop:12, paddingTop:12, borderTop:"1px solid rgba(45,190,108,0.2)" }}>
+                    <div style={{ fontSize:11, color:"var(--text3)", marginBottom:4 }}>INCOMING INSPECTOR</div>
+                    <select value={incomingInspectorId} onChange={e=>setIncomingInspectorId(e.target.value)}
+                      style={{ width:"100%", background:"var(--panel2)", border:"1px solid var(--border)", color:"var(--text)", padding:"0.4rem 0.5rem", borderRadius:"var(--radius)", fontSize:"0.85rem" }}>
+                      <option value="">— Select Inspector —</option>
+                      {staff.filter(s=>s.hallId===myTable.hallId&&(s.position==="inspector"||s.position==="dealer_inspector")).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                  </div>
                 </div>
               </div>
               <div style={{ padding:"12px 14px", background:"var(--bg3)", borderRadius:"var(--radius)", marginBottom:16, fontSize:12, color:"var(--text2)" }}>
@@ -4834,18 +5114,23 @@ function TableSessionPage({ user, staff, tables, chips, transactions, onUpdateTa
                 </div>
 
                 <div className="card">
-                  <div className="card-header"><div className="card-title">Rotation History</div></div>
+                  <div className="card-header"><div className="card-title">Session History</div><span style={{color:"var(--text3)",fontSize:"0.8rem"}}>{sessionLog.length} completed</span></div>
                   <div className="card-body">
                     {sessionLog.length === 0
-                      ? <div className="empty-state" style={{ padding:20 }}><div className="empty-icon">🔄</div><p>No rotations completed yet</p></div>
+                      ? <div className="empty-state" style={{ padding:20 }}><div className="empty-icon">🔄</div><p>No sessions completed yet</p></div>
                       : <table className="data-table">
-                          <thead><tr><th>Time</th><th>Float</th><th>Result</th></tr></thead>
+                          <thead><tr><th>#</th><th>Time</th><th>Float</th><th>Result</th><th>Out Dealer</th><th>In Dealer</th><th>Out Insp.</th><th>In Insp.</th></tr></thead>
                           <tbody>
                             {sessionLog.map(s => (
                               <tr key={s.id}>
+                                <td className="text-mono text-gold" style={{fontWeight:700}}>{s.sessionNo||"—"}</td>
                                 <td className="text-mono text-muted">{s.time}</td>
                                 <td className="text-mono">{fmt(s.newFloat)}</td>
-                                <td className="text-mono" style={{ color:s.diff>=0?"var(--green)":"var(--red)" }}>{s.diff>=0?"+":""}{fmt(s.diff)}</td>
+                                <td className="text-mono" style={{ color:s.diff>=0?"var(--green)":"var(--red)", fontWeight:600 }}>{s.diff>=0?"+":""}{fmt(s.diff)}</td>
+                                <td style={{fontSize:"0.8rem",color:"var(--text2)"}}>{s.outDealer||"—"}</td>
+                                <td style={{fontSize:"0.8rem",color:"var(--green)"}}>{s.inDealer||"—"}</td>
+                                <td style={{fontSize:"0.8rem",color:"var(--text2)"}}>{s.outInspector||"—"}</td>
+                                <td style={{fontSize:"0.8rem",color:"var(--blue)"}}>{s.inInspector||"—"}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -5754,19 +6039,22 @@ function ProfilePage({ user, onUpdateUser }) {
 }
 
 
-function LoginPage({ onLogin }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+function LoginPage({ onLogin, users }) {
+  const [name, setName]   = useState("");
+  const [empNo, setEmpNo] = useState("");
   const [error, setError] = useState("");
+  const allUsers = users && users.length ? users : DEMO_USERS;
 
   function handleLogin(e) {
     e?.preventDefault();
-    const user = DEMO_USERS.find(u => (u.email === email || u.empNo === email) && u.password === password);
+    const n = name.trim().toLowerCase();
+    const e2 = empNo.trim().toUpperCase();
+    const user = allUsers.find(u => u.name.toLowerCase() === n && u.empNo.toUpperCase() === e2);
     if (user) { onLogin(user); }
-    else { setError("Invalid email or password. Use demo credentials below."); }
+    else { setError("Invalid name or employee number. Click an account below to auto-fill."); }
   }
 
-  function quickLogin(u) { setEmail(u.email); setPassword(u.password); }
+  function quickLogin(u) { setName(u.name); setEmpNo(u.empNo); setError(""); }
 
   return (
     <div className="login-page">
@@ -5778,22 +6066,22 @@ function LoginPage({ onLogin }) {
         <div className="login-body">
           {error && <div className="login-error">{error}</div>}
           <div className="form-group">
-            <label className="form-label">Email or Employee Number</label>
-            <input className="form-input" type="text" placeholder="email@casino.com or EMP001" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLogin()} />
+            <label className="form-label">Full Name</label>
+            <input className="form-input" type="text" placeholder="e.g. Patrick Njoroge" value={name} onChange={e => setName(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLogin()} />
           </div>
           <div className="form-group">
-            <label className="form-label">Password</label>
-            <input className="form-input" type="password" placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLogin()} />
+            <label className="form-label">Employee Number <span style={{ color:"var(--text3)", fontSize:"0.75rem" }}>(used as password)</span></label>
+            <input className="form-input" type="text" placeholder="e.g. EMP001" value={empNo} onChange={e => setEmpNo(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLogin()} />
           </div>
           <button className="btn btn-gold" style={{ width: "100%", justifyContent: "center", padding: "12px" }} onClick={handleLogin}>
             Sign In → CasinoOps
           </button>
           <div className="login-demo">
-            <div className="login-demo-title">Demo Accounts</div>
-            {DEMO_USERS.map(u => (
+            <div className="login-demo-title">Quick Access — Click to Fill</div>
+            {allUsers.map(u => (
               <div key={u.id} className="login-demo-item" style={{ cursor: "pointer" }} onClick={() => quickLogin(u)}>
-                <span className="login-demo-role">{u.role.replace("_"," ").toUpperCase()}</span>
-                <span className="login-demo-cred">{u.email}</span>
+                <span className="login-demo-role">{u.role.replace(/_/g," ").toUpperCase()}</span>
+                <span className="login-demo-cred">{u.name} · {u.empNo}</span>
               </div>
             ))}
           </div>
@@ -6254,7 +6542,7 @@ export default function CasinoOps() {
   if (!user) return (
     <>
       <style>{STYLES}</style>
-      <LoginPage onLogin={u => { setUser(u); setPage("dashboard"); }} />
+      <LoginPage onLogin={u => { setUser(u); setPage("dashboard"); }} users={users} />
     </>
   );
 
@@ -6276,7 +6564,7 @@ export default function CasinoOps() {
       case "incidents":
         return <IncidentsPage incidents={incidents} user={user} tables={tables} onAddIncident={addIncident} onUpdateIncident={updateIncident} rolePermissions={rolePermissions} />;
       case "fills":
-        return <FillsPage fills={fills} tables={tables} user={user} chips={chips} onAddFill={addFill} onApproveFill={approveFill} onUpdateTable={updateTable} staff={staff} tableTransfers={tableTransfers} onAddTransfer={addTransfer} cageReserve={cageReserve} onSetCageReserve={setCageReserve} rolePermissions={rolePermissions} />;
+        return <FillsPage fills={fills} tables={tables} user={user} chips={chips} onAddFill={addFill} onApproveFill={approveFill} onUpdateTable={updateTable} staff={staff} tableTransfers={tableTransfers} onAddTransfer={addTransfer} cageReserve={cageReserve} onSetCageReserve={setCageReserve} rolePermissions={rolePermissions} halls={halls} onAddChipCount={addChipCount} chipCountLog={chipCountLog} />;
       case "reports":
         return <ReportsPage tables={tables} staff={staff} transactions={transactions} chipCountLog={chipCountLog} rolePermissions={rolePermissions} />;
       case "roster":
