@@ -1556,58 +1556,75 @@ function BreakListPage({ staff, tables, user, halls, onUpdateTable, onAddInciden
   const hallDealers = staff.filter(s => s.hallId === myHallId && (s.position === "dealer" || s.position === "dealer_inspector"));
   const hallInspectors = staff.filter(s => s.hallId === myHallId && (s.position === "inspector" || s.position === "dealer_inspector"));
 
-  // ── BREAKLIST ──────────────────────────────────────────────────────────────
-  const SESSION_COUNT = 12;
-  const sessions = Array.from({ length: SESSION_COUNT }, (_, i) => i + 1);
+  // ── BREAKLIST (progressive) ────────────────────────────────────────────────
   const SLOT_OPTIONS = ["X", ...hallTables.map(t => t.id)];
 
-  // Current session number based on time elapsed (20min per session)
-  const currentSession = Math.min(SESSION_COUNT, Math.floor(Date.now() / (20*60*1000)) % SESSION_COUNT + 1);
+  // completedSessions: array of { sessionNo, time, entries:[{staffId,name,tableId}] }
+  // currentSessionNo: 1-based counter, increments when rotation fires
+  const [completedSessions, setCompletedSessions] = useState([]);
+  const [currentSessionNo, setCurrentSessionNo] = useState(1);
+  // nextAssignments: { staffId → tableId } — set by pit boss in assignments tab
+  const [nextAssignments, setNextAssignments] = useState({});
+  const [breakHistory, setBreakHistory] = useState([]);
+  // rotation timer: fires every 20 min
+  const [sessionElapsed, setSessionElapsed] = useState(0); // seconds into current session
+  const SESSION_SECS = 1200;
 
-  // Breaklist stores sessions progressively — only sessions up to currentSession are "committed"
-  function initBreakList() {
-    return hallDealers.map((s, si) => {
-      const sesh = {};
-      // Session 1 = dealer's current table assignment
-      const myTable = hallTables.find(t => t.dealerId === s.id);
-      sesh[1] = myTable?.id || "X";
-      // Future sessions cycle from table assignments
-      for (let i = 2; i <= SESSION_COUNT; i++) {
-        const tableIdx = (si + i - 1) % Math.max(1, hallTables.filter(t=>t.status!=="closed").length);
-        sesh[i] = hallTables.filter(t=>t.status!=="closed")[tableIdx]?.id || "X";
-      }
-      return { staffId: s.id, name: s.name, position: s.position, sessions: sesh };
-    });
-  }
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setSessionElapsed(e => {
+        if (e + 1 >= SESSION_SECS) {
+          // Rotation due — check if next assignments are logged
+          const hasNextAssignments = Object.keys(nextAssignments).length > 0;
+          if (!hasNextAssignments) {
+            // Push notification to pit boss and shift manager
+            notify("🔴 Rotation Due — No next session assignment logged!", "🔴", "var(--red)");
+          }
+          return 0;
+        }
+        return e + 1;
+      });
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [nextAssignments]);
 
-  const [breaklist, setBreakList] = useState(initBreakList);
-  const [breakHistory, setBreakHistory] = useState([]); // [{shiftType, date, time, entries}]
-
-  // Sync breaklist session 1 when table assignments change (TableAssignTab writes to tables)
-  // This ensures breaklist S1 always reflects current table assignment
-  const syncedBreakList = breaklist.map(b => {
-    const s = hallDealers.find(d => d.id === b.staffId);
-    const myTable = hallTables.find(t => t.dealerId === b.staffId);
-    return { ...b, sessions: { ...b.sessions, 1: myTable?.id || b.sessions[1] || "X" } };
+  // Build current session snapshot from table assignments
+  const currentEntries = hallDealers.map(s => {
+    const tbl = hallTables.find(t => t.dealerId === s.id);
+    return { staffId: s.id, name: s.name, position: s.position, tableId: tbl?.id || "X" };
   });
 
-  function setSession(staffId, session, value) {
-    setBreakList(bl => bl.map(b =>
-      b.staffId === staffId ? { ...b, sessions: { ...b.sessions, [session]: value } } : b
-    ));
+  function logRotation() {
+    const now = new Date().toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"});
+    setCompletedSessions(cs => [{ sessionNo: currentSessionNo, time: now, entries: currentEntries }, ...cs]);
+    setCurrentSessionNo(n => n + 1);
+    setNextAssignments({});
+    setSessionElapsed(0);
+  }
+
+  function setNextAssignment(staffId, tableId) {
+    setNextAssignments(na => ({ ...na, [staffId]: tableId }));
   }
 
   function archiveBreakList(shiftType) {
     const now = new Date();
     setBreakHistory(h => [{
-      id: "bh" + Date.now(),
-      shiftType,
+      id: "bh" + Date.now(), shiftType,
       date: now.toLocaleDateString("en-KE"),
       time: now.toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"}),
-      entries: JSON.parse(JSON.stringify(syncedBreakList))
+      sessions: completedSessions,
     }, ...h]);
-    setBreakList(initBreakList());
+    setCompletedSessions([]);
+    setCurrentSessionNo(1);
+    setNextAssignments({});
+    setSessionElapsed(0);
   }
+
+  const secsLeft = SESSION_SECS - sessionElapsed;
+  const timerMins = Math.floor(secsLeft / 60);
+  const timerSecs = secsLeft % 60;
+  const timerColor = secsLeft > 300 ? "var(--green)" : secsLeft > 60 ? "var(--yellow)" : "var(--red)";
+  const hasNextSession = Object.keys(nextAssignments).length > 0;
 
   // ── TABLE ASSIGNMENTS TAB ─────────────────────────────────────────────────
   function TableAssignTab() {
@@ -1638,11 +1655,9 @@ function BreakListPage({ staff, tables, user, halls, onUpdateTable, onAddInciden
                         value={t.dealerId||""}
                         onChange={e => {
                           onUpdateTable(t.id, { dealerId: e.target.value||null });
-                          // Sync breaklist S1 for the newly assigned dealer
+                          // Pre-populate next session assignment for the newly assigned dealer
                           if (e.target.value) {
-                            setBreakList(bl => bl.map(b =>
-                              b.staffId === e.target.value ? { ...b, sessions: { ...b.sessions, 1: t.id } } : b
-                            ));
+                            setNextAssignment(e.target.value, t.id);
                           }
                         }}>
                         <option value="">— Unassigned —</option>
@@ -1815,7 +1830,7 @@ function BreakListPage({ staff, tables, user, halls, onUpdateTable, onAddInciden
       <div className="section-header">
         <div>
           <div className="section-title">Pit Operations</div>
-          <div className="section-sub">🏛 {myHall?.name || "My Hall"} · {hallDealers.length} dealers · {hallTables.filter(t=>t.status==="open").length} active tables · Session {currentSession} of {SESSION_COUNT}</div>
+          <div className="section-sub">🏛 {myHall?.name || "My Hall"} · {hallDealers.length} dealers · {hallTables.filter(t=>t.status==="open").length} active tables · Session {currentSessionNo}</div>
         </div>
         <div className="flex gap-8">
           {tab === "breaklist" && <button className="btn btn-outline btn-sm" onClick={() => archiveBreakList("Current")}>📁 Archive & Reset</button>}
@@ -1832,67 +1847,97 @@ function BreakListPage({ staff, tables, user, halls, onUpdateTable, onAddInciden
       {/* ── TABLE ASSIGNMENTS (data entry) ── */}
       {tab === "assignments" && <TableAssignTab />}
 
-      {/* ── BREAKLIST (read + pit boss can edit) ── */}
+      {/* ── BREAKLIST (progressive) ── */}
       {tab === "breaklist" && (
-        <div className="card">
-          <div className="card-header">
-            <div className="card-title">Session Grid — Current Shift</div>
-            <div className="flex gap-8">
-              <span className="bl-table" style={{fontSize:9,padding:"2px 6px"}}>T-XX</span><span style={{fontSize:11,color:"var(--text3)"}}>Table</span>
-              <span className="bl-break" style={{marginLeft:8,fontSize:9,padding:"2px 6px"}}>X</span><span style={{fontSize:11,color:"var(--text3)"}}>Break</span>
-              <span style={{ marginLeft:8, fontSize:10, color:"var(--gold)", fontFamily:"var(--font-mono)" }}>▶ S{currentSession} now</span>
+        <div>
+          {/* Current session card with timer */}
+          <div className="card" style={{ marginBottom: 14 }}>
+            <div className="card-header">
+              <div className="card-title">Session {currentSessionNo} — Live</div>
+              <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                <div style={{ fontFamily:"var(--font-mono)", fontSize:22, color:timerColor, fontWeight:700, minWidth:60 }}>
+                  {String(timerMins).padStart(2,"0")}:{String(timerSecs).padStart(2,"0")}
+                </div>
+                {hasPermission(user.role, "manage_breaklist", rolePermissions) && (
+                  <button className="btn btn-sm btn-gold" onClick={logRotation}>✓ Log Rotation</button>
+                )}
+                {!hasPermission(user.role, "manage_breaklist", rolePermissions) && (
+                  <span style={{ fontSize:11, color:"var(--yellow)" }}>👁 View only</span>
+                )}
+              </div>
             </div>
-          </div>
-          <div className="card-body">
-            <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 12 }}>
-              Session 1 mirrors current table assignments. Pit boss can edit future sessions. Sessions progress every 20 minutes.
-              {!hasPermission(user.role, "manage_breaklist", rolePermissions) && <span style={{ color:"var(--yellow)", marginLeft:8 }}>👁 View only</span>}
-            </div>
-            <div className="breaklist-table">
-              <table className="breaklist-grid">
+            <div className="card-body">
+              <table className="data-table">
                 <thead>
                   <tr>
-                    <th style={{ textAlign: "left", width: 140 }}>Dealer</th>
+                    <th>Dealer</th>
                     <th>Position</th>
-                    {sessions.map(s => (
-                      <th key={s} style={{ background: s === currentSession ? "rgba(201,168,76,0.2)" : "transparent" }}>
-                        S{s}
-                        <div style={{fontSize:8,color:s<=currentSession?"var(--gold)":"var(--text3)",fontWeight:400}}>
-                          {s<=currentSession?"✓":""}{(s-1)*20}m
-                        </div>
-                      </th>
-                    ))}
+                    <th>Current Table</th>
+                    {hasNextSession && <th style={{ color:"var(--yellow)" }}>Next Session</th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {syncedBreakList.map(b => (
-                    <tr key={b.staffId}>
-                      <td className="bl-name">{b.name}</td>
-                      <td><span className="badge badge-gold" style={{ fontSize: 9 }}>{b.position.replace(/_/g," ").toUpperCase()}</span></td>
-                      {sessions.map(s => {
-                        const isPast = s < currentSession;
-                        const isCurrent = s === currentSession;
-                        const val = b.sessions[s];
-                        return (
-                          <td key={s} style={{ padding:"4px", background: isCurrent?"rgba(201,168,76,0.08)":"transparent", opacity: isPast?0.5:1 }}>
-                            {hasPermission(user.role, "manage_breaklist", rolePermissions) && !isPast
-                              ? <select
-                                  style={{ background: val==="X"?"var(--blue-dim)":"var(--green-dim)", color: val==="X"?"var(--blue)":"var(--green)", border:"none", borderRadius:4, fontSize:10, padding:"2px 4px", cursor:"pointer", fontFamily:"var(--font-mono)", width:"100%" }}
-                                  value={val}
-                                  onChange={e => setSession(b.staffId, s, e.target.value)}>
-                                  {SLOT_OPTIONS.map(opt => <option key={opt} value={opt} style={{background:"var(--panel)"}}>{opt}</option>)}
-                                </select>
-                              : <div style={{ textAlign:"center", fontSize:10, fontFamily:"var(--font-mono)", color: val==="X"?"var(--blue)":"var(--green)", fontWeight:600, padding:"2px 0" }}>{val}</div>
-                            }
+                  {currentEntries.map(e => {
+                    const nextTbl = nextAssignments[e.staffId];
+                    return (
+                      <tr key={e.staffId}>
+                        <td className="bl-name">{e.name}</td>
+                        <td><span className="badge badge-gold" style={{fontSize:9}}>{e.position.replace(/_/g," ").toUpperCase()}</span></td>
+                        <td className="text-mono" style={{color: e.tableId==="X"?"var(--blue)":"var(--green)"}}>
+                          {e.tableId === "X" ? "⏸ Break" : e.tableId}
+                        </td>
+                        {hasNextSession && (
+                          <td className="text-mono" style={{color: nextTbl?"var(--yellow)":"var(--text3)"}}>
+                            {nextTbl ? nextTbl : <span style={{color:"var(--text3)"}}>—</span>}
                           </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
+                        )}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
+              {!hasNextSession && (
+                <div style={{ marginTop:12, padding:"8px 12px", background:"var(--red-dim)", borderRadius:"var(--radius)", fontSize:11, color:"var(--red)" }}>
+                  ⚠ No next session assignments logged. Go to <strong>Table Assignments</strong> to assign dealers before rotation.
+                </div>
+              )}
             </div>
           </div>
+
+          {/* Past completed sessions */}
+          {completedSessions.length > 0 && (
+            <div className="card">
+              <div className="card-header">
+                <div className="card-title">Completed Sessions ({completedSessions.length})</div>
+              </div>
+              <div className="card-body">
+                {[...completedSessions].map(session => (
+                  <div key={session.sessionNo} style={{ marginBottom:16, paddingBottom:14, borderBottom:"1px solid var(--border2)" }}>
+                    <div style={{ fontSize:12, color:"var(--gold)", fontFamily:"var(--font-mono)", marginBottom:8, display:"flex", alignItems:"center", gap:10 }}>
+                      <span>S{session.sessionNo}</span>
+                      <span style={{ color:"var(--text3)", fontWeight:400 }}>{session.time}</span>
+                      <span className="badge badge-green" style={{fontSize:9,marginLeft:4}}>DONE</span>
+                    </div>
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+                      {session.entries.map(e => (
+                        <div key={e.staffId} style={{ padding:"4px 10px", background:"var(--panel2)", border:"1px solid var(--border2)", borderRadius:6, fontSize:11 }}>
+                          <span style={{color:"var(--text)"}}>{e.name}</span>
+                          <span style={{color:"var(--text3)",margin:"0 4px"}}>→</span>
+                          <span style={{color: e.tableId==="X"?"var(--blue)":"var(--green)", fontFamily:"var(--font-mono)"}}>
+                            {e.tableId === "X" ? "Break" : e.tableId}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {completedSessions.length === 0 && currentEntries.length === 0 && (
+            <div className="empty-state"><div className="empty-icon">📋</div><p>No dealers assigned in this hall yet. Use Table Assignments to assign dealers to tables.</p></div>
+          )}
         </div>
       )}
 
@@ -1905,31 +1950,30 @@ function BreakListPage({ staff, tables, user, halls, onUpdateTable, onAddInciden
               <div key={h.id} className="card" style={{ marginBottom:14 }}>
                 <div className="card-header">
                   <div className="card-title">Shift: {h.shiftType}</div>
-                  <div style={{ fontSize:11, color:"var(--text3)" }}>{h.date} at {h.time}</div>
+                  <div style={{ fontSize:11, color:"var(--text3)" }}>{h.date} at {h.time} · {h.sessions.length} sessions</div>
                 </div>
                 <div className="card-body">
-                  <div className="breaklist-table">
-                    <table className="breaklist-grid">
-                      <thead>
-                        <tr>
-                          <th style={{ textAlign:"left" }}>Dealer</th>
-                          {sessions.map(s => <th key={s}>S{s}</th>)}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {h.entries.map(b => (
-                          <tr key={b.staffId}>
-                            <td className="bl-name">{b.name}</td>
-                            {sessions.map(s => (
-                              <td key={s} style={{ textAlign:"center", fontSize:10, fontFamily:"var(--font-mono)", color: b.sessions[s]==="X"?"var(--blue)":"var(--green)" }}>
-                                {b.sessions[s]||"—"}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  {h.sessions.length === 0
+                    ? <p style={{fontSize:12,color:"var(--text3)"}}>No sessions recorded in this archive.</p>
+                    : h.sessions.map(session => (
+                      <div key={session.sessionNo} style={{ marginBottom:14, paddingBottom:12, borderBottom:"1px solid var(--border2)" }}>
+                        <div style={{ fontSize:12, color:"var(--gold)", fontFamily:"var(--font-mono)", marginBottom:6 }}>
+                          Session {session.sessionNo} · {session.time}
+                        </div>
+                        <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                          {(session.entries||[]).map(e => (
+                            <div key={e.staffId} style={{ padding:"3px 8px", background:"var(--panel2)", borderRadius:5, fontSize:11 }}>
+                              <span style={{color:"var(--text)"}}>{e.name}</span>
+                              <span style={{color:"var(--text3)",margin:"0 4px"}}>→</span>
+                              <span style={{color: e.tableId==="X"?"var(--blue)":"var(--green)", fontFamily:"var(--font-mono)"}}>
+                                {e.tableId === "X" ? "Break" : e.tableId}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))
+                  }
                 </div>
               </div>
             ))
@@ -4708,7 +4752,7 @@ function AdminPage({ users, onAddUser, onUpdateUser, onDeleteUser, halls, onAddH
   );
 }
 
-function TableSessionPage({ user, staff, tables, chips, transactions, onUpdateTable, onAddActivity, halls, onAddTransaction, onUpdateTransaction, onDeleteTransaction, incidents, fills, onAddChipCount }) {
+function TableSessionPage({ user, staff, tables, chips, transactions, onUpdateTable, onAddActivity, halls, onAddTransaction, onUpdateTransaction, onDeleteTransaction, incidents, fills, onAddChipCount, tableSessionLogs, onAddSessionLog }) {
   // TABLE-CENTRIC: find the table this session is tracking.
   // Staff role maps to a table, not a person. Inspector rotates within the session.
   const myStaffProfile = staff.find(s => s.id === user.staffId) || staff.find(s => s.name === user.name);
@@ -4743,14 +4787,14 @@ function TableSessionPage({ user, staff, tables, chips, transactions, onUpdateTa
   const timerPct   = (secondsLeft / ROTATION_SECS) * 100;
   const timerColor = secondsLeft > 300 ? "var(--green)" : secondsLeft > 60 ? "var(--yellow)" : "var(--red)";
 
-  // ── SESSION STATE ──
+  // ── SESSION STATE ── (sessionLog lives in app state, persists across navigation)
+  const sessionLog = (tableSessionLogs && myTable) ? (tableSessionLogs[myTable.id] || []) : [];
   const [sessionStarted, setSessionStarted] = useState(myTable?.status === "open");
-  const [sessionNumber, setSessionNumber] = useState(1);
+  const [sessionNumber, setSessionNumber] = useState(sessionLog.length + 1);
 
   // ── ROTATION / CHIP COUNT FLOW ──
   const [rotationStep, setRotationStep] = useState(null);
   const [counts, setCounts] = useState({});
-  const [sessionLog, setSessionLog] = useState([]);
   // incoming dealer/inspector selection for confirm step
   const [incomingDealerId, setIncomingDealerId]     = useState("");
   const [incomingInspectorId, setIncomingInspectorId] = useState("");
@@ -4777,7 +4821,7 @@ function TableSessionPage({ user, staff, tables, chips, transactions, onUpdateTa
       const incomingDealer = incomingDealerId ? staff.find(s=>s.id===incomingDealerId) : null;
       const incomingInspector = incomingInspectorId ? staff.find(s=>s.id===incomingInspectorId) : null;
       const result = { id: Date.now(), sessionNo: sessionNumber, time: now, tableId: myTable.id, prevFloat: prev, newFloat: total, diff, inspector: myInspector?.name || "—", outDealer: user.name, inDealer: incomingDealer?.name||"—", outInspector: myInspector?.name||"—", inInspector: incomingInspector?.name||"—" };
-      setSessionLog(sl => [result, ...sl]);
+      if (onAddSessionLog) onAddSessionLog(myTable.id, result);
       setSessionNumber(n => n + 1);
       onAddActivity("dealer_rotation", `Session ${sessionNumber} at ${myTable.id} — ${diff>=0?"Win":"Loss"} ${fmt(Math.abs(diff))}`, "🔄");
       if (onAddChipCount) {
@@ -6310,6 +6354,11 @@ export default function CasinoOps() {
   const [cageReserve, setCageReserve] = useState(500000);
   const [chipCountLog, setChipCountLog] = useState([]);
   const [customers, setCustomers] = useState(INITIAL_CUSTOMERS);
+  const [tableSessionLogs, setTableSessionLogs] = useState({}); // { tableId: [session,...] }
+
+  function addSessionLog(tableId, entry) {
+    setTableSessionLogs(logs => ({ ...logs, [tableId]: [entry, ...(logs[tableId] || [])] }));
+  }
 
   function notify(text, icon = "✅", color = "var(--gold)") {
     setNotification({ text, icon, color });
@@ -6595,7 +6644,7 @@ export default function CasinoOps() {
       case "customer_log":
         return <CustomerLogPage tables={tables} transactions={transactions} onAddTransaction={addTransaction} onUpdateTransaction={updateTransaction} onDeleteTransaction={deleteTransaction} />;
       case "table_session":
-        return <TableSessionPage user={user} staff={staff} tables={tables} chips={chips} transactions={transactions} onUpdateTable={updateTable} onAddActivity={addActivity} halls={halls} onAddTransaction={addTransaction} onUpdateTransaction={updateTransaction} onDeleteTransaction={deleteTransaction} incidents={incidents} fills={fills} onAddChipCount={addChipCount} />;
+        return <TableSessionPage user={user} staff={staff} tables={tables} chips={chips} transactions={transactions} onUpdateTable={updateTable} onAddActivity={addActivity} halls={halls} onAddTransaction={addTransaction} onUpdateTransaction={updateTransaction} onDeleteTransaction={deleteTransaction} incidents={incidents} fills={fills} onAddChipCount={addChipCount} tableSessionLogs={tableSessionLogs} onAddSessionLog={addSessionLog} />;
       case "customers":
         return (
           <CustomerProfilesPage
