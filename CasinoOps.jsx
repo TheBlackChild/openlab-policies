@@ -543,6 +543,7 @@ const ROLE_NAV = {
     { label: "Shift Control", icon: "🔑", page: "shift_control" },
     { label: "Floor View", icon: "🗺️", page: "floor" },
     { label: "Staffing", icon: "👷", page: "staffing" },
+    { label: "Roster", icon: "📅", page: "roster" },
     { label: "Tables", icon: "🃏", page: "tables" },
     { label: "Incidents", icon: "⚠️", page: "incidents" },
     { label: "Cage & Fills", icon: "💰", page: "fills" },
@@ -2621,7 +2622,7 @@ function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpd
   }
 
   function HouseTab() {
-    const [chipCounts, setChipCounts] = useState({});
+    const [houseSubTab, setHouseSubTab]       = useState("open"); // "open" | "close"
     const [tableFormModal, setTableFormModal] = useState(null); // { table, mode: "open"|"close" }
     const [formCounts, setFormCounts]         = useState({});
 
@@ -2679,81 +2680,93 @@ function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpd
           ))}
         </div>
 
-        {/* Per-table rows with open/close form buttons */}
-        <div className="card mb-16">
-          <div className="card-header">
-            <div className="card-title">Table Float Status</div>
-            <div style={{ fontSize:11, color:"var(--text3)" }}>Click Open or Close on any table to enter denomination counts and generate the signed form.</div>
-          </div>
-          <div className="card-body">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Table</th><th>Game</th><th>Profile</th>
-                  {chips.map(c=><th key={c.id} style={{textAlign:"center"}}><div style={{width:10,height:10,borderRadius:"50%",background:c.hex,display:"inline-block",marginRight:3}} />{c.color}</th>)}
-                  <th>Count</th><th>Capacity</th><th>W/L</th><th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tables.map(t => {
-                  const cap = t.floatCapacity || t.chipTotal || 0;
-                  const cur = t.chipTotal || 0;
-                  const wl  = cur - cap;
-                  return (
-                    <tr key={t.id}>
+        {/* Open / Close sub-tabs */}
+        <div className="tab-bar" style={{ marginBottom:14 }}>
+          <div className={`tab-item ${houseSubTab==="open"?"active":""}`} onClick={() => setHouseSubTab("open")}>📋 Opening Count</div>
+          <div className={`tab-item ${houseSubTab==="close"?"active":""}`} onClick={() => setHouseSubTab("close")}>📋 Closing Count</div>
+        </div>
+
+        {/* Opening Count — closed tables waiting to be opened */}
+        {houseSubTab === "open" && (
+          <div className="card mb-16">
+            <div className="card-header">
+              <div className="card-title">Opening Float Entry</div>
+              <div style={{ fontSize:11, color:"var(--text3)" }}>Select a table to enter denomination counts and generate the signed Opening Float form.</div>
+            </div>
+            <div className="card-body">
+              <table className="data-table">
+                <thead>
+                  <tr><th>Table</th><th>Game</th><th>Profile</th><th>Status</th><th>Float Capacity</th><th>Action</th></tr>
+                </thead>
+                <tbody>
+                  {tables.map(t => (
+                    <tr key={t.id} style={{ opacity: t.status==="open" ? 0.5 : 1 }}>
                       <td className="text-mono text-gold">{t.id}</td>
                       <td>{t.gameType}</td>
                       <td style={{ fontSize:11, color:"var(--text3)" }}>{t.tableName||"—"}</td>
-                      {chips.map(c => (
-                        <td key={c.id} style={{textAlign:"center"}}>
-                          {canAll
-                            ? <input type="number" min="0" className="form-input" style={{width:60,padding:"2px 5px",textAlign:"center",fontSize:11}}
-                                placeholder="0"
-                                value={chipCounts[`${t.id}_${c.id}`]||""}
-                                onChange={e => {
-                                  const qty = Number(e.target.value);
-                                  const newCC = {...chipCounts, [`${t.id}_${c.id}`]:qty};
-                                  setChipCounts(newCC);
-                                  const newTotal = chips.reduce((sum,ch) => sum + ch.value*(newCC[`${t.id}_${ch.id}`]||0),0);
-                                  if (newTotal > 0) onUpdateTable(t.id, { chipTotal: newTotal });
-                                }} />
-                            : <span className="text-mono">—</span>
-                          }
-                        </td>
-                      ))}
-                      <td className="text-mono text-gold">{fmt(cur)}</td>
-                      <td className="text-mono">{fmt(cap)}</td>
-                      <td className="text-mono" style={{ color:wl>=0?"var(--green)":"var(--red)", fontWeight:600 }}>
-                        {wl>=0?"+":""}{fmt(wl)}
-                      </td>
+                      <td><StatusBadge status={t.status} /></td>
+                      <td className="text-mono" style={{ color:"var(--gold)" }}>{fmt(t.floatCapacity||0)}</td>
                       <td>
-                        <div className="flex gap-8">
-                          {t.status === "closed"
-                            ? <button className="btn btn-xs btn-green" onClick={() => openTableForm(t,"open")}>📋 Open Form</button>
-                            : <button className="btn btn-xs btn-red" onClick={() => openTableForm(t,"close")}>📋 Close Form</button>
-                          }
-                        </div>
+                        {t.status === "closed"
+                          ? <button className="btn btn-xs btn-green" onClick={() => openTableForm(t,"open")}>📋 Open Float</button>
+                          : <span style={{ fontSize:11, color:"var(--text3)" }}>Already open</span>
+                        }
                       </td>
                     </tr>
-                  );
-                })}
-              </tbody>
-              <tfoot>
-                <tr style={{ background:"var(--bg3)" }}>
-                  <td colSpan={chips.length+3} className="text-mono" style={{ fontWeight:600, color:"var(--text3)", fontSize:11 }}>HOUSE TOTAL</td>
-                  <td className="text-mono text-gold" style={{ fontWeight:700 }}>{fmt(totalCurrent)}</td>
-                  <td className="text-mono" style={{ fontWeight:700 }}>{fmt(totalCapacity)}</td>
-                  <td className="text-mono" style={{ fontWeight:700, color:houseWinLoss>=0?"var(--green)":"var(--red)" }}>{houseWinLoss>=0?"+":""}{fmt(houseWinLoss)}</td>
-                  <td></td>
-                </tr>
-              </tfoot>
-            </table>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+        )}
 
-        {canAll && (
-          <div style={{ padding:"12px 16px", background:"var(--blue-dim)", border:"1px solid rgba(74,158,245,0.3)", borderRadius:"var(--radius)", fontSize:12, color:"var(--blue)" }}>
-            💡 After closing count, each table resets to its Float Capacity for the next day. Use per-table Close Form to record denomination counts with 3-party signatures.
+        {/* Closing Count — open tables ready to be closed */}
+        {houseSubTab === "close" && (
+          <div className="card mb-16">
+            <div className="card-header">
+              <div className="card-title">Closing Float Entry</div>
+              <div style={{ fontSize:11, color:"var(--text3)" }}>Select an open table to enter closing denomination counts, record the result, and print the signed Close form.</div>
+            </div>
+            <div className="card-body">
+              <table className="data-table">
+                <thead>
+                  <tr><th>Table</th><th>Game</th><th>Profile</th><th>Status</th><th>Opening Float</th><th>Current Count</th><th>W/L</th><th>Action</th></tr>
+                </thead>
+                <tbody>
+                  {tables.map(t => {
+                    const cap = t.openingFloat || t.floatCapacity || 0;
+                    const cur = t.chipTotal || 0;
+                    const wl  = cur - cap;
+                    return (
+                      <tr key={t.id} style={{ opacity: t.status==="closed" ? 0.5 : 1 }}>
+                        <td className="text-mono text-gold">{t.id}</td>
+                        <td>{t.gameType}</td>
+                        <td style={{ fontSize:11, color:"var(--text3)" }}>{t.tableName||"—"}</td>
+                        <td><StatusBadge status={t.status} /></td>
+                        <td className="text-mono">{fmt(cap)}</td>
+                        <td className="text-mono text-gold">{fmt(cur)}</td>
+                        <td className="text-mono" style={{ color:wl>=0?"var(--green)":"var(--red)", fontWeight:600 }}>{wl>=0?"+":""}{fmt(wl)}</td>
+                        <td>
+                          {t.status === "open"
+                            ? <button className="btn btn-xs btn-red" onClick={() => openTableForm(t,"close")}>📋 Close Float</button>
+                            : <span style={{ fontSize:11, color:"var(--text3)" }}>Already closed</span>
+                          }
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr style={{ background:"var(--bg3)" }}>
+                    <td colSpan={4} className="text-mono" style={{ fontWeight:600, color:"var(--text3)", fontSize:11 }}>HOUSE TOTAL</td>
+                    <td className="text-mono" style={{ fontWeight:700 }}>{fmt(totalCapacity)}</td>
+                    <td className="text-mono text-gold" style={{ fontWeight:700 }}>{fmt(totalCurrent)}</td>
+                    <td className="text-mono" style={{ fontWeight:700, color:houseWinLoss>=0?"var(--green)":"var(--red)" }}>{houseWinLoss>=0?"+":""}{fmt(houseWinLoss)}</td>
+                    <td></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
           </div>
         )}
 
@@ -3453,23 +3466,48 @@ function RosterPage({ staff, userRole, rolePermissions }) {
 
 function ReportsPage({ tables, staff, transactions, chipCountLog, rolePermissions }) {
   const [tab, setTab] = useState("house");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo,   setDateTo]   = useState("");
   transactions = transactions || [];
 
-  const totalDrop = transactions.filter(t => t.type === "drop").reduce((s,t) => s + t.amount, 0);
-  const totalWin  = transactions.filter(t => t.type === "win").reduce((s,t)  => s + t.amount, 0);
+  // Date-filter helper: if no filter set, pass all; otherwise filter by tx.date
+  const filteredTxns = (dateFrom || dateTo)
+    ? transactions.filter(tx => {
+        const d = tx.date || "";
+        if (dateFrom && d && d < dateFrom) return false;
+        if (dateTo   && d && d > dateTo)   return false;
+        return true;
+      })
+    : transactions;
+
+  const totalDrop = filteredTxns.filter(t => t.type === "drop").reduce((s,t) => s + t.amount, 0);
+  const totalWin  = filteredTxns.filter(t => t.type === "win").reduce((s,t)  => s + t.amount, 0);
   const netHouse  = totalDrop - totalWin;
   const winRate   = totalDrop > 0 ? ((netHouse / totalDrop) * 100).toFixed(1) : "0.0";
 
   const tableStats = tables.map(t => {
-    const drop = transactions.filter(x => x.tableId === t.id && x.type === "drop").reduce((s,x) => s+x.amount, 0);
-    const win  = transactions.filter(x => x.tableId === t.id && x.type === "win").reduce((s,x)  => s+x.amount, 0);
+    const drop = filteredTxns.filter(x => x.tableId === t.id && x.type === "drop").reduce((s,x) => s+x.amount, 0);
+    const win  = filteredTxns.filter(x => x.tableId === t.id && x.type === "win").reduce((s,x)  => s+x.amount, 0);
     return { ...t, drop, win, net: drop - win };
   }).filter(t => t.drop > 0 || t.win > 0);
+
+  // Hourly analytics: group transactions by hour for bar charts
+  const hourlyData = Array.from({ length: 24 }, (_, h) => {
+    const label = `${String(h).padStart(2,"0")}:00`;
+    const hrTxns = filteredTxns.filter(tx => {
+      const hr = tx.time ? parseInt(tx.time.split(":")[0], 10) : -1;
+      return hr === h;
+    });
+    const customers = new Set(hrTxns.map(tx => tx.customerId).filter(Boolean)).size;
+    const drop = hrTxns.filter(t => t.type==="drop").reduce((s,t) => s+t.amount, 0);
+    const win  = hrTxns.filter(t => t.type==="win").reduce((s,t)  => s+t.amount, 0);
+    return { label, customers, drop, win, net: drop - win, count: hrTxns.length };
+  }).filter(h => h.count > 0);
 
   // Item F: Real dealer performance from actual transactions at their table
   const dealers = (staff || []).filter(s => s.position === "dealer" || s.position === "dealer_inspector").map(s => {
     const myTable  = tables.find(t => t.dealerId === s.id);
-    const tblTxns  = myTable ? transactions.filter(tx => tx.tableId === myTable.id) : [];
+    const tblTxns  = myTable ? filteredTxns.filter(tx => tx.tableId === myTable.id) : [];
     const drop     = tblTxns.filter(t => t.type === "drop").reduce((a,t) => a+t.amount, 0);
     const win      = tblTxns.filter(t => t.type === "win").reduce((a,t)  => a+t.amount, 0);
     const net      = drop - win;                     // house net at this dealer's table
@@ -3504,7 +3542,7 @@ function ReportsPage({ tables, staff, transactions, chipCountLog, rolePermission
   });
 
   const customerMap = {};
-  transactions.forEach(tx => {
+  filteredTxns.forEach(tx => {
     if (!customerMap[tx.customerId]) customerMap[tx.customerId] = { id: tx.customerId, drop: 0, win: 0, count: 0 };
     customerMap[tx.customerId][tx.type] += tx.amount;
     customerMap[tx.customerId].count++;
@@ -3514,10 +3552,20 @@ function ReportsPage({ tables, staff, transactions, chipCountLog, rolePermission
   return (
     <div>
       <div className="section-header">
-        <div><div className="section-title">Reports & Analytics</div><div className="section-sub">Live data — current shift</div></div>
+        <div>
+          <div className="section-title">Reports & Analytics</div>
+          <div className="section-sub">{(dateFrom || dateTo) ? `Filtered: ${dateFrom||"…"} → ${dateTo||"…"}` : "Live data — current shift"}</div>
+        </div>
+        <div className="flex gap-8 items-center">
+          <input type="date" className="form-input" style={{ padding:"4px 8px", fontSize:11, width:130 }} value={dateFrom} onChange={e => setDateFrom(e.target.value)} title="From date" />
+          <span style={{ fontSize:11, color:"var(--text3)" }}>to</span>
+          <input type="date" className="form-input" style={{ padding:"4px 8px", fontSize:11, width:130 }} value={dateTo} onChange={e => setDateTo(e.target.value)} title="To date" />
+          {(dateFrom || dateTo) && <button className="btn btn-sm btn-outline" onClick={() => { setDateFrom(""); setDateTo(""); }}>✕ Clear</button>}
+          <button className="btn btn-sm btn-outline" onClick={() => window.print()}>🖨 Print</button>
+        </div>
       </div>
       <div className="tab-bar">
-        {[["house","House Performance"],["dealers","Dealer Performance"],["tables","Table Profitability"],["chips","Chip Count History"],["customers","Customer Activity"]].map(([k,l]) =>
+        {[["house","House Performance"],["analytics","Analytics"],["dealers","Dealer Performance"],["tables","Table Profitability"],["chips","Chip Count History"],["customers","Customer Activity"]].map(([k,l]) =>
           <div key={k} className={`tab-item ${tab===k?"active":""}`} onClick={() => setTab(k)}>{l}</div>
         )}
       </div>
@@ -3541,12 +3589,12 @@ function ReportsPage({ tables, staff, transactions, chipCountLog, rolePermission
           <div className="card">
             <div className="card-header"><div className="card-title">Transaction Timeline</div></div>
             <div className="card-body">
-              {transactions.length === 0
+              {filteredTxns.length === 0
                 ? <div className="empty-state"><div className="empty-icon">📋</div><p>No transactions logged yet</p></div>
                 : <table className="data-table">
                     <thead><tr><th>Time</th><th>Customer</th><th>Table</th><th>Type</th><th>Amount</th></tr></thead>
                     <tbody>
-                      {transactions.map(tx => (
+                      {filteredTxns.map(tx => (
                         <tr key={tx.id}>
                           <td className="text-mono text-muted">{tx.time}</td>
                           <td className="text-gold text-mono">{tx.customerId}</td>
@@ -3560,6 +3608,84 @@ function ReportsPage({ tables, staff, transactions, chipCountLog, rolePermission
               }
             </div>
           </div>
+        </div>
+      )}
+
+      {tab === "analytics" && (
+        <div>
+          {hourlyData.length === 0
+            ? <div className="empty-state"><div className="empty-icon">📊</div><p>No transaction data yet — log transactions to see hourly analytics.</p></div>
+            : <>
+              {/* Hourly Customer Influx */}
+              <div className="card" style={{ marginBottom:14 }}>
+                <div className="card-header">
+                  <div className="card-title">Hourly Customer Influx</div>
+                  <div style={{ fontSize:11, color:"var(--text3)" }}>Unique customers per hour</div>
+                </div>
+                <div className="card-body">
+                  <div style={{ display:"flex", alignItems:"flex-end", gap:6, height:160, padding:"8px 0" }}>
+                    {hourlyData.map(h => {
+                      const maxCust = Math.max(...hourlyData.map(x => x.customers), 1);
+                      const pct = Math.round((h.customers / maxCust) * 100);
+                      return (
+                        <div key={h.label} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:4, minWidth:32 }}>
+                          <div style={{ fontSize:9, color:"var(--gold)", fontFamily:"var(--font-mono)", fontWeight:700 }}>{h.customers}</div>
+                          <div style={{ width:"100%", height:`${Math.max(pct,4)}%`, background:"var(--blue)", borderRadius:"3px 3px 0 0", minHeight:4, transition:"height 0.3s", opacity:0.85 }} title={`${h.label}: ${h.customers} customers`} />
+                          <div style={{ fontSize:8, color:"var(--text3)", fontFamily:"var(--font-mono)", textAlign:"center" }}>{h.label.slice(0,5)}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Hourly House Performance */}
+              <div className="card" style={{ marginBottom:14 }}>
+                <div className="card-header">
+                  <div className="card-title">Hourly House Performance (Net)</div>
+                  <div style={{ fontSize:11, color:"var(--text3)" }}>House net per hour (drop − win)</div>
+                </div>
+                <div className="card-body">
+                  <div style={{ display:"flex", alignItems:"flex-end", gap:6, height:160, padding:"8px 0" }}>
+                    {hourlyData.map(h => {
+                      const maxNet = Math.max(...hourlyData.map(x => Math.abs(x.net)), 1);
+                      const pct = Math.round((Math.abs(h.net) / maxNet) * 100);
+                      const color = h.net >= 0 ? "var(--green)" : "var(--red)";
+                      return (
+                        <div key={h.label} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:4, minWidth:32 }}>
+                          <div style={{ fontSize:9, color, fontFamily:"var(--font-mono)", fontWeight:700 }}>{h.net>=0?"+":""}{(h.net/1000).toFixed(0)}K</div>
+                          <div style={{ width:"100%", height:`${Math.max(pct,4)}%`, background:color, borderRadius:"3px 3px 0 0", minHeight:4, transition:"height 0.3s", opacity:0.8 }} title={`${h.label}: ${fmt(h.net)}`} />
+                          <div style={{ fontSize:8, color:"var(--text3)", fontFamily:"var(--font-mono)", textAlign:"center" }}>{h.label.slice(0,5)}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Hourly summary table */}
+              <div className="card">
+                <div className="card-header"><div className="card-title">Hourly Breakdown</div></div>
+                <div className="card-body">
+                  <table className="data-table">
+                    <thead><tr><th>Hour</th><th>Customers</th><th>Transactions</th><th style={{textAlign:"right"}}>Drop</th><th style={{textAlign:"right"}}>Win Out</th><th style={{textAlign:"right"}}>Net</th></tr></thead>
+                    <tbody>
+                      {hourlyData.map(h => (
+                        <tr key={h.label}>
+                          <td className="text-mono text-gold">{h.label}</td>
+                          <td><span className="badge badge-blue">{h.customers}</span></td>
+                          <td style={{ color:"var(--text2)" }}>{h.count}</td>
+                          <td className="text-mono" style={{ textAlign:"right" }}>{fmt(h.drop)}</td>
+                          <td className="text-mono" style={{ textAlign:"right" }}>{fmt(h.win)}</td>
+                          <td className="text-mono" style={{ textAlign:"right", color:h.net>=0?"var(--green)":"var(--red)", fontWeight:600 }}>{h.net>=0?"+":""}{fmt(h.net)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          }
         </div>
       )}
 
@@ -4041,7 +4167,133 @@ function AdminPage({ users, onAddUser, onUpdateUser, onDeleteUser, halls, onAddH
   const [modal, setModal] = useState(null); // { type, data? }
   const [adminConfirm, setAdminConfirm] = useState(null); // { title, message, onConfirm }
   const roleColors = { system_admin: "badge-red", management: "badge-gold", shift_manager: "badge-blue", pit_boss: "badge-orange", staff: "badge-green" };
-  const TABS = ["users","roles","halls","tables","chips","shifts","roster"];
+
+  const FORM_TYPES = [
+    { key: "open_float",   label: "Opening Float Form" },
+    { key: "close_float",  label: "Closing Float Form" },
+    { key: "fill_request", label: "Chip Fill Request" },
+    { key: "gi_report",    label: "GI Report" },
+    { key: "transfer",     label: "Table Transfer Form" },
+  ];
+  const [casinoInfo, setCasinoInfo] = useState({ name: "Grand Casino", address: "", phone: "", email: "", regNo: "" });
+  const [formTemplates, setFormTemplates] = useState(() => {
+    const map = {};
+    ["open_float","close_float","fill_request","gi_report","transfer"].forEach(k => {
+      map[k] = { customHeader: "", customFooter: "", notes: "" };
+    });
+    return map;
+  });
+  const [formsFormKey, setFormsFormKey] = useState("open_float");
+
+  function FormsEditorTab() {
+    const [info, setInfo] = useState(casinoInfo);
+    const [tpl, setTpl]   = useState(formTemplates[formsFormKey] || { customHeader:"", customFooter:"", notes:"" });
+
+    function saveInfo() { setCasinoInfo(info); }
+    function saveTpl()  { setFormTemplates(prev => ({ ...prev, [formsFormKey]: tpl })); }
+
+    function downloadTemplate() {
+      const content = [
+        `=== ${FORM_TYPES.find(f=>f.key===formsFormKey)?.label} ===`,
+        `Casino: ${info.name}`,
+        `Address: ${info.address}`,
+        `Phone: ${info.phone}`,
+        ``,
+        `--- HEADER ---`,
+        tpl.customHeader || "(default header)",
+        ``,
+        `--- BODY ---`,
+        `[Form fields will appear here at print time]`,
+        ``,
+        `--- FOOTER ---`,
+        tpl.customFooter || "(default footer)",
+        ``,
+        `Notes: ${tpl.notes || "—"}`,
+      ].join("\n");
+      const blob = new Blob([content], { type: "text/plain" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${formsFormKey}_template.txt`;
+      a.click();
+    }
+
+    return (
+      <div style={{ display:"grid", gridTemplateColumns:"280px 1fr", gap:20 }}>
+        {/* Left — Casino Details */}
+        <div>
+          <div className="card" style={{ marginBottom:14 }}>
+            <div className="card-header"><div className="card-title">🏛 Casino Details</div></div>
+            <div className="card-body">
+              {[
+                { label:"Casino Name",     key:"name" },
+                { label:"Address",         key:"address" },
+                { label:"Phone",           key:"phone" },
+                { label:"Email",           key:"email" },
+                { label:"Registration No.",key:"regNo" },
+              ].map(f => (
+                <div className="form-group" key={f.key}>
+                  <label className="form-label">{f.label}</label>
+                  <input className="form-input" value={info[f.key]||""} onChange={e => setInfo(i=>({...i,[f.key]:e.target.value}))} placeholder={f.label} />
+                </div>
+              ))}
+              <button className="btn btn-gold btn-sm" style={{ width:"100%" }} onClick={saveInfo}>💾 Save Casino Info</button>
+            </div>
+          </div>
+
+          {/* Form type selector */}
+          <div className="card">
+            <div className="card-header"><div className="card-title">📋 Form Type</div></div>
+            <div className="card-body" style={{ padding:"8px" }}>
+              {FORM_TYPES.map(f => (
+                <div key={f.key}
+                  onClick={() => { setFormsFormKey(f.key); setTpl(formTemplates[f.key] || { customHeader:"", customFooter:"", notes:"" }); }}
+                  style={{ padding:"10px 12px", borderRadius:"var(--radius)", cursor:"pointer", marginBottom:4, background:formsFormKey===f.key?"var(--gold-dim)":"transparent", border:`1px solid ${formsFormKey===f.key?"var(--gold)":"transparent"}`, color:formsFormKey===f.key?"var(--gold)":"var(--text)", fontSize:13 }}>
+                  {f.label}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Right — Template Editor */}
+        <div>
+          <div className="card">
+            <div className="card-header">
+              <div className="card-title">✏️ {FORM_TYPES.find(f=>f.key===formsFormKey)?.label} — Template</div>
+              <div className="flex gap-8">
+                <button className="btn btn-sm btn-outline" onClick={downloadTemplate}>⬇ Download</button>
+                <button className="btn btn-sm btn-gold" onClick={saveTpl}>💾 Save Template</button>
+              </div>
+            </div>
+            <div className="card-body">
+              {/* Preview header with casino info */}
+              <div style={{ padding:"12px 16px", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:"var(--radius)", marginBottom:14, fontSize:12 }}>
+                <div style={{ fontFamily:"var(--font-display)", fontSize:18, color:"var(--gold)", fontWeight:700, marginBottom:2 }}>{info.name || "Casino Name"}</div>
+                <div style={{ color:"var(--text2)", fontSize:11 }}>{info.address} {info.phone ? `· ${info.phone}` : ""}</div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Custom Header Text</label>
+                <textarea className="form-textarea" rows={3} value={tpl.customHeader} onChange={e => setTpl(t=>({...t,customHeader:e.target.value}))} placeholder="Appears at the top of this form (e.g. shift dates, venue, title override...)" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Custom Footer Text</label>
+                <textarea className="form-textarea" rows={3} value={tpl.customFooter} onChange={e => setTpl(t=>({...t,customFooter:e.target.value}))} placeholder="Appears at the bottom (e.g. legal disclaimer, signature block instructions...)" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Internal Notes</label>
+                <textarea className="form-textarea" rows={2} value={tpl.notes} onChange={e => setTpl(t=>({...t,notes:e.target.value}))} placeholder="Internal notes — not printed on the form" />
+              </div>
+              <div style={{ padding:"10px 14px", background:"var(--blue-dim)", borderRadius:"var(--radius)", fontSize:11, color:"var(--blue)" }}>
+                💡 These templates apply when forms are printed from Cage &amp; Fills and Table Session pages. Casino Info is auto-included on all forms.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  const TABS = ["users","roles","halls","tables","chips","shifts","roster","forms"];
 
   // ── ROLE PERMISSIONS STATE ──
   const ALL_PERMISSIONS = [
@@ -4566,7 +4818,7 @@ function AdminPage({ users, onAddUser, onUpdateUser, onDeleteUser, halls, onAddH
     );
   }
 
-  const tabLabels = { users: "Users", roles: "Roles & Permissions", halls: "Halls", tables: "Tables", chips: "Chips", shifts: "Shifts", roster: "Roster" };
+  const tabLabels = { users: "Users", roles: "Roles & Permissions", halls: "Halls", tables: "Tables", chips: "Chips", shifts: "Shifts", roster: "Roster", forms: "Forms Editor" };
 
   return (
     <div>
@@ -4729,6 +4981,9 @@ function AdminPage({ users, onAddUser, onUpdateUser, onDeleteUser, halls, onAddH
 
       {/* ── ROLES & PERMISSIONS ── */}
       {tab === "roles" && <RolesTab />}
+
+      {/* ── FORMS EDITOR ── */}
+      {tab === "forms" && <FormsEditorTab />}
 
       {/* ── MODALS ── */}
       {modal?.type === "user" && <UserModal data={modal.data} onClose={() => setModal(null)} />}
