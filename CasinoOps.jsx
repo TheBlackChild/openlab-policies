@@ -532,6 +532,7 @@ const ROLE_NAV = {
   management: [
     { label: "Dashboard", icon: "📊", page: "dashboard" },
     { label: "Floor View", icon: "🗺️", page: "floor" },
+    { label: "Float Mgmt", icon: "🏦", page: "float_mgmt" },
     { label: "Reports", icon: "📈", page: "reports" },
     { label: "Incidents", icon: "⚠️", page: "incidents" },
     { label: "Roster", icon: "📅", page: "roster" },
@@ -731,7 +732,7 @@ function Dashboard({ user, tables, staff, incidents, fills, activity, onNavigate
         stats: [
           { label: "My Tables",     value: String(tables.filter(t=>t.hallId===pbHallId).length),                                                          sub: `${tables.filter(t=>t.hallId===pbHallId&&t.status==="open").length} active`,   icon: "🃏", accent: "var(--green)",  page: "breaklist" },
           { label: "Hall Dealers",  value: String(staff.filter(s=>s.hallId===pbHallId&&s.position.includes("dealer")).length),                            sub: `${staff.filter(s=>s.hallId===pbHallId&&s.status==="break").length} on break`, icon: "👤", accent: "var(--blue)",   page: "breaklist" },
-          { label: "Fill Requests", value: String(fills.filter(f=>f.status==="pending").length),                                                          sub: "Pending approval",                                                           icon: "🪙", accent: "var(--yellow)", page: "fills"     },
+          { label: "Hall Net",      value: (() => { const ht = tables.filter(t=>t.hallId===pbHallId); const drop = (transactions||[]).filter(tx=>ht.map(t=>t.id).includes(tx.tableId)&&tx.type==="drop").reduce((s,t)=>s+t.amount,0); const win = (transactions||[]).filter(tx=>ht.map(t=>t.id).includes(tx.tableId)&&tx.type==="win").reduce((s,t)=>s+t.amount,0); const net=drop-win; return drop>0?fmt(net):"No data"; })(), sub: "House net today",  icon: "📈", accent: "var(--green)",  page: "reports"   },
           { label: "Open Incidents",value: String(incidents.filter(i=>i.status!=="resolved" && tables.filter(t=>t.hallId===pbHallId).map(t=>t.id).includes(i.tableId)).length), sub: "In my hall",         icon: "⚠️", accent: "var(--red)",    page: "incidents" },
         ]
       };
@@ -748,8 +749,8 @@ function Dashboard({ user, tables, staff, incidents, fills, activity, onNavigate
         title: `Table Operations${myTbl ? ` — ${myTbl.id}` : ""}`,
         stats: [
           { label: "My Table",         value: myTbl ? myTbl.id : "None",         sub: myTbl ? `${myTbl.gameType}` : "Not assigned",   icon: "🃏", accent: "var(--gold)",   page: "table_session" },
-          { label: "Session Net",      value: myDrop>0 ? fmt(myNet) : "No data",  sub: "House net this session",                        icon: "📈", accent: myNet>=0?"var(--green)":"var(--red)", page: "table_session" },
-          { label: "Customers",        value: String([...new Set(myTxns.map(t=>t.customerId))].filter(Boolean).length), sub: "Active at my table", icon: "👥", accent: "var(--blue)", page: "table_session" },
+          { label: "Shift Net",        value: myDrop>0 ? fmt(myNet) : "No data",  sub: `Drop ${myDrop>0?fmt(myDrop):"—"} · Win ${myWin>0?fmt(myWin):"—"}`, icon: "📈", accent: myNet>=0?"var(--green)":"var(--red)", page: "table_session" },
+          { label: "Customers",        value: String([...new Set(myTxns.map(t=>t.customerId))].filter(Boolean).length), sub: `${myTxns.length} transactions today`, icon: "👥", accent: "var(--blue)", page: "table_session" },
           { label: "Open Incidents",   value: String(myIncidents.length),          sub: "At my table",                                   icon: "⚠️", accent: "var(--red)",    page: "incidents" },
         ],
         myTbl, myTxns, myIncidents,
@@ -916,15 +917,16 @@ function Dashboard({ user, tables, staff, incidents, fills, activity, onNavigate
   );
 }
 
-function TablesPage({ tables, halls, staff, onUpdateTable, onOpenTableModal, canEdit }) {
+function TablesPage({ tables, halls, staff, onUpdateTable, onOpenTableModal, canEdit, chips }) {
   const [hallFilter, setHallFilter] = useState("all");
+  const [chipModal, setChipModal]   = useState(null); // table object
   const filtered = hallFilter === "all" ? tables : tables.filter(t => t.hallId === hallFilter);
   return (
     <div>
       <div className="section-header">
         <div>
           <div className="section-title">Tables</div>
-          <div className="section-sub">{tables.filter(t=>t.status==="open").length} open · {tables.length} total</div>
+          <div className="section-sub">{tables.filter(t=>t.status==="open").length} open · {tables.length} total · click any row to view chip count</div>
         </div>
         {canEdit && <button className="btn btn-gold" onClick={onOpenTableModal}>＋ New Table</button>}
       </div>
@@ -949,7 +951,8 @@ function TablesPage({ tables, halls, staff, onUpdateTable, onOpenTableModal, can
                     const d = staff.find(s => s.id === t.dealerId);
                     const ins = staff.find(s => s.id === t.inspectorId);
                     return (
-                      <tr key={t.id}>
+                      <tr key={t.id} style={{ cursor:"pointer" }}
+                        onClick={e => { if (e.target.tagName !== "SELECT" && e.target.tagName !== "OPTION") setChipModal(t); }}>
                         <td><span className="text-mono text-gold">{t.id}</span></td>
                         <td>{t.gameType}</td>
                         <td><StatusBadge status={t.status} /></td>
@@ -957,7 +960,7 @@ function TablesPage({ tables, halls, staff, onUpdateTable, onOpenTableModal, can
                         <td>{ins ? ins.name : <span className="text-muted">—</span>}</td>
                         <td className="text-mono">{fmt(t.minBet)}</td>
                         <td className="text-mono text-gold">{t.chipTotal ? fmt(t.chipTotal) : "—"}</td>
-                        {canEdit && <td>
+                        {canEdit && <td onClick={e => e.stopPropagation()}>
                           <select className="form-select" style={{ padding: "4px 8px", fontSize: 11, width: 130 }}
                             value={t.status}
                             onChange={e => onUpdateTable(t.id, { status: e.target.value })}>
@@ -976,6 +979,77 @@ function TablesPage({ tables, halls, staff, onUpdateTable, onOpenTableModal, can
           </div>
         );
       })}
+
+      {/* ── CHIP COUNT MODAL ── */}
+      {chipModal && (
+        <div className="modal-overlay" onClick={() => setChipModal(null)}>
+          <div className="modal modal-lg" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title">🪙 {chipModal.id} — Chip Count Snapshot</div>
+              <button className="modal-close" onClick={() => setChipModal(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div style={{ display:"flex", gap:16, marginBottom:14, flexWrap:"wrap" }}>
+                <div style={{ padding:"8px 14px", background:"var(--gold-dim)", borderRadius:"var(--radius)", fontSize:12 }}>
+                  <span style={{ color:"var(--text3)" }}>Game: </span><strong>{chipModal.gameType}</strong>
+                </div>
+                <div style={{ padding:"8px 14px", background:"var(--gold-dim)", borderRadius:"var(--radius)", fontSize:12 }}>
+                  <span style={{ color:"var(--text3)" }}>Profile: </span><strong>{chipModal.tableName || "—"}</strong>
+                </div>
+                <div style={{ padding:"8px 14px", background:"var(--gold-dim)", borderRadius:"var(--radius)", fontSize:12 }}>
+                  <span style={{ color:"var(--text3)" }}>Opened: </span><strong>{chipModal.openedAt || "Not open"}</strong>
+                </div>
+              </div>
+              <table className="data-table">
+                <thead>
+                  <tr><th>Chip</th><th>Value (KES)</th><th style={{textAlign:"center"}}>Qty</th><th style={{textAlign:"right"}}>Subtotal</th></tr>
+                </thead>
+                <tbody>
+                  {(chips || []).map(c => {
+                    const qty = chipModal.chipBreakdown?.[c.id] || 0;
+                    return (
+                      <tr key={c.id} style={{ opacity: qty === 0 ? 0.4 : 1 }}>
+                        <td>
+                          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                            <div style={{ width:14, height:14, borderRadius:"50%", background:c.hex, border:"2px solid rgba(255,255,255,0.2)", flexShrink:0 }} />
+                            <span>{c.color}</span>
+                          </div>
+                        </td>
+                        <td className="text-mono">{fmt(c.value)}</td>
+                        <td className="text-mono" style={{ textAlign:"center", fontWeight: qty > 0 ? 700 : 400 }}>{qty}</td>
+                        <td className="text-mono" style={{ textAlign:"right", color: qty > 0 ? "var(--gold)" : "var(--text3)" }}>
+                          {qty > 0 ? fmt(c.value * qty) : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr style={{ background:"var(--gold-dim)", fontWeight:700 }}>
+                    <td colSpan={2}>TOTAL FLOAT</td>
+                    <td className="text-mono" style={{ textAlign:"center" }}>
+                      {chipModal.chipBreakdown ? Object.values(chipModal.chipBreakdown).reduce((s,v)=>s+(v||0),0) : "—"}
+                    </td>
+                    <td className="text-mono text-gold" style={{ textAlign:"right", fontSize:16 }}>{fmt(chipModal.chipTotal || 0)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+              {!chipModal.chipBreakdown && (
+                <div style={{ marginTop:12, padding:"8px 12px", background:"var(--blue-dim)", borderRadius:"var(--radius)", fontSize:11, color:"var(--blue)" }}>
+                  💡 No denomination breakdown recorded yet. Enter chip counts via <strong>Cage &amp; Fills → House Open/Close</strong>.
+                </div>
+              )}
+              <div style={{ marginTop:12, display:"flex", justifyContent:"space-between", fontSize:12, color:"var(--text3)" }}>
+                <span>Opening Float: <strong className="text-mono" style={{ color:"var(--text)" }}>{fmt(chipModal.openingFloat || chipModal.floatCapacity || 0)}</strong></span>
+                <span>Float Capacity: <strong className="text-mono" style={{ color:"var(--text)" }}>{fmt(chipModal.floatCapacity || 0)}</strong></span>
+                <span>W/L: <strong className="text-mono" style={{ color: (chipModal.chipTotal||0)-(chipModal.openingFloat||chipModal.floatCapacity||0)>=0?"var(--green)":"var(--red)" }}>
+                  {(()=>{ const d=(chipModal.chipTotal||0)-(chipModal.openingFloat||chipModal.floatCapacity||0); return (d>=0?"+":"")+fmt(d); })()}
+                </strong></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1557,8 +1631,10 @@ function BreakListPage({ staff, tables, user, halls, onUpdateTable, onAddInciden
   const hallDealers = staff.filter(s => s.hallId === myHallId && (s.position === "dealer" || s.position === "dealer_inspector"));
   const hallInspectors = staff.filter(s => s.hallId === myHallId && (s.position === "inspector" || s.position === "dealer_inspector"));
 
-  // ── BREAKLIST (progressive) ────────────────────────────────────────────────
-  const SLOT_OPTIONS = ["X", ...hallTables.map(t => t.id)];
+  // ── BREAKLIST ─────────────────────────────────────────────────────────────
+  const SESSION_COUNT = 12;
+  const gridSessions  = Array.from({ length: SESSION_COUNT }, (_, i) => i + 1);
+  const SLOT_OPTIONS  = ["X", ...hallTables.map(t => t.id)];
 
   // completedSessions: array of { sessionNo, time, entries:[{staffId,name,tableId}] }
   // currentSessionNo: 1-based counter, increments when rotation fires
@@ -1597,10 +1673,14 @@ function BreakListPage({ staff, tables, user, halls, onUpdateTable, onAddInciden
 
   function logRotation() {
     const now = new Date().toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"});
+    const nextNo = currentSessionNo + 1;
     setCompletedSessions(cs => [{ sessionNo: currentSessionNo, time: now, entries: currentEntries }, ...cs]);
-    setCurrentSessionNo(n => n + 1);
+    setCurrentSessionNo(nextNo);
     setNextAssignments({});
     setSessionElapsed(0);
+    if (nextNo <= SESSION_COUNT) {
+      notify(`🔄 Session ${nextNo} started — log next assignments`, "🔄", "var(--gold)");
+    }
   }
 
   function setNextAssignment(staffId, tableId) {
@@ -1627,13 +1707,44 @@ function BreakListPage({ staff, tables, user, halls, onUpdateTable, onAddInciden
   const timerColor = secsLeft > 300 ? "var(--green)" : secsLeft > 60 ? "var(--yellow)" : "var(--red)";
   const hasNextSession = Object.keys(nextAssignments).length > 0;
 
+  // Derive the 12-session grid from completedSessions + current live + nextAssignments
+  const gridData = hallDealers.map(dealer => {
+    const sessions = {};
+    completedSessions.forEach(cs => {
+      const e = cs.entries.find(e => e.staffId === dealer.id);
+      sessions[cs.sessionNo] = e?.tableId || "X";
+    });
+    const liveTbl = hallTables.find(t => t.dealerId === dealer.id);
+    sessions[currentSessionNo] = liveTbl?.id || "X";
+    if (currentSessionNo + 1 <= SESSION_COUNT && nextAssignments[dealer.id]) {
+      sessions[currentSessionNo + 1] = nextAssignments[dealer.id];
+    }
+    return { staffId: dealer.id, name: dealer.name, position: dealer.position, sessions };
+  });
+
+  function logAssignment() {
+    const newNext = {};
+    hallDealers.forEach(s => {
+      const tbl = hallTables.find(t => t.dealerId === s.id);
+      newNext[s.id] = tbl?.id || "X";
+    });
+    setNextAssignments(newNext);
+    notify(`Session S${Math.min(currentSessionNo + 1, SESSION_COUNT)} assignments logged`, "📋", "var(--gold)");
+  }
+
   // ── TABLE ASSIGNMENTS TAB ─────────────────────────────────────────────────
   function TableAssignTab() {
     return (
       <div>
-        <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 14 }}>
-          Assign dealers and inspectors to each table in <strong style={{ color: "var(--gold)" }}>{myHall?.name || "your hall"}</strong>.
-          Session 1 of the breaklist updates automatically from these assignments.
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+          <div style={{ fontSize: 11, color: "var(--text3)" }}>
+            Assign dealers to tables in <strong style={{ color: "var(--gold)" }}>{myHall?.name || "your hall"}</strong>, then click <strong style={{ color:"var(--gold)" }}>Log Assignment</strong> to populate the next breaklist session.
+          </div>
+          {hasPermission(user.role, "manage_breaklist", rolePermissions) && (
+            <button className="btn btn-gold btn-sm" onClick={logAssignment} style={{ flexShrink:0, marginLeft:12 }}>
+              📋 Log Assignment → S{Math.min(currentSessionNo + 1, SESSION_COUNT)}
+            </button>
+          )}
         </div>
         <div className="card">
           <div className="card-body">
@@ -1848,97 +1959,85 @@ function BreakListPage({ staff, tables, user, halls, onUpdateTable, onAddInciden
       {/* ── TABLE ASSIGNMENTS (data entry) ── */}
       {tab === "assignments" && <TableAssignTab />}
 
-      {/* ── BREAKLIST (progressive) ── */}
+      {/* ── BREAKLIST (12-session grid) ── */}
       {tab === "breaklist" && (
-        <div>
-          {/* Current session card with timer */}
-          <div className="card" style={{ marginBottom: 14 }}>
-            <div className="card-header">
-              <div className="card-title">Session {currentSessionNo} — Live</div>
-              <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-                <div style={{ fontFamily:"var(--font-mono)", fontSize:22, color:timerColor, fontWeight:700, minWidth:60 }}>
-                  {String(timerMins).padStart(2,"0")}:{String(timerSecs).padStart(2,"0")}
-                </div>
-                {hasPermission(user.role, "manage_breaklist", rolePermissions) && (
-                  <button className="btn btn-sm btn-gold" onClick={logRotation}>✓ Log Rotation</button>
-                )}
-                {!hasPermission(user.role, "manage_breaklist", rolePermissions) && (
-                  <span style={{ fontSize:11, color:"var(--yellow)" }}>👁 View only</span>
-                )}
-              </div>
+        <div className="card">
+          <div className="card-header">
+            <div className="card-title">
+              Breaklist — {myHall?.name || "Hall"} &nbsp;
+              <span style={{ fontFamily:"var(--font-mono)", fontSize:13, color:timerColor }}>
+                {String(timerMins).padStart(2,"0")}:{String(timerSecs).padStart(2,"0")}
+              </span>
             </div>
-            <div className="card-body">
-              <table className="data-table">
+            <div className="flex gap-8 items-center">
+              <span style={{ fontSize:11, color:"var(--text3)" }}>S{currentSessionNo}/{SESSION_COUNT}</span>
+              {hasPermission(user.role, "manage_breaklist", rolePermissions)
+                ? <button className="btn btn-sm btn-gold" onClick={logRotation}>↻ Next Session</button>
+                : <span style={{ fontSize:11, color:"var(--yellow)" }}>👁 View only</span>
+              }
+            </div>
+          </div>
+          <div className="card-body" style={{ padding:0 }}>
+            <div style={{ overflowX:"auto" }}>
+              <table className="breaklist-grid" style={{ width:"100%", borderCollapse:"collapse" }}>
                 <thead>
                   <tr>
-                    <th>Dealer</th>
-                    <th>Position</th>
-                    <th>Current Table</th>
-                    {hasNextSession && <th style={{ color:"var(--yellow)" }}>Next Session</th>}
+                    <th style={{ textAlign:"left", padding:"8px 12px", minWidth:130, position:"sticky", left:0, background:"var(--panel)", zIndex:1 }}>Dealer</th>
+                    <th style={{ padding:"8px 6px", minWidth:70 }}>Position</th>
+                    {gridSessions.map(s => (
+                      <th key={s} style={{
+                        padding:"6px 4px", minWidth:48, textAlign:"center",
+                        background: s === currentSessionNo ? "rgba(201,168,76,0.18)" : s === currentSessionNo+1 && hasNextSession ? "rgba(245,166,35,0.08)" : "transparent",
+                        borderBottom: s === currentSessionNo ? "2px solid var(--gold)" : "1px solid var(--border2)",
+                      }}>
+                        <div style={{ fontFamily:"var(--font-mono)", fontSize:11, color: s < currentSessionNo ? "var(--text3)" : s === currentSessionNo ? "var(--gold)" : "var(--text2)", fontWeight: s === currentSessionNo ? 700 : 400 }}>S{s}</div>
+                        <div style={{ fontSize:8, color:"var(--text3)", marginTop:1 }}>
+                          {s < currentSessionNo ? "✓" : s === currentSessionNo ? "▶" : ""}{(s-1)*20}m
+                        </div>
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {currentEntries.map(e => {
-                    const nextTbl = nextAssignments[e.staffId];
-                    return (
-                      <tr key={e.staffId}>
-                        <td className="bl-name">{e.name}</td>
-                        <td><span className="badge badge-gold" style={{fontSize:9}}>{e.position.replace(/_/g," ").toUpperCase()}</span></td>
-                        <td className="text-mono" style={{color: e.tableId==="X"?"var(--blue)":"var(--green)"}}>
-                          {e.tableId === "X" ? "⏸ Break" : e.tableId}
-                        </td>
-                        {hasNextSession && (
-                          <td className="text-mono" style={{color: nextTbl?"var(--yellow)":"var(--text3)"}}>
-                            {nextTbl ? nextTbl : <span style={{color:"var(--text3)"}}>—</span>}
-                          </td>
-                        )}
+                  {gridData.length === 0
+                    ? <tr><td colSpan={SESSION_COUNT+2} style={{ textAlign:"center", padding:24, color:"var(--text3)", fontSize:12 }}>No dealers assigned in this hall yet. Use Table Assignments to begin.</td></tr>
+                    : gridData.map(b => (
+                      <tr key={b.staffId} style={{ borderBottom:"1px solid var(--border2)" }}>
+                        <td className="bl-name" style={{ padding:"6px 12px", position:"sticky", left:0, background:"var(--panel)", zIndex:1 }}>{b.name}</td>
+                        <td style={{ padding:"4px 6px" }}><span className="badge badge-gold" style={{ fontSize:8 }}>{b.position.replace(/_/g," ").toUpperCase()}</span></td>
+                        {gridSessions.map(s => {
+                          const isPast    = s < currentSessionNo;
+                          const isCurrent = s === currentSessionNo;
+                          const isNext    = s === currentSessionNo + 1;
+                          const val       = b.sessions[s];
+                          return (
+                            <td key={s} style={{
+                              padding:"3px 2px", textAlign:"center",
+                              background: isCurrent ? "rgba(201,168,76,0.06)" : "transparent",
+                              opacity: isPast ? 0.5 : 1,
+                            }}>
+                              {val
+                                ? <span style={{
+                                    fontFamily:"var(--font-mono)", fontSize:10, fontWeight: isCurrent ? 700 : 500,
+                                    color: val==="X" ? "var(--blue)" : isCurrent ? "var(--gold)" : isNext ? "var(--yellow)" : "var(--green)",
+                                  }}>{val}</span>
+                                : <span style={{ fontSize:9, color:"var(--text3)" }}>—</span>
+                              }
+                            </td>
+                          );
+                        })}
                       </tr>
-                    );
-                  })}
+                    ))
+                  }
                 </tbody>
               </table>
-              {!hasNextSession && (
-                <div style={{ marginTop:12, padding:"8px 12px", background:"var(--red-dim)", borderRadius:"var(--radius)", fontSize:11, color:"var(--red)" }}>
-                  ⚠ No next session assignments logged. Go to <strong>Table Assignments</strong> to assign dealers before rotation.
-                </div>
-              )}
             </div>
+            {!hasNextSession && currentSessionNo < SESSION_COUNT && (
+              <div style={{ margin:"10px 12px", padding:"8px 12px", background:"var(--red-dim)", borderRadius:"var(--radius)", fontSize:11, color:"var(--red)" }}>
+                ⚠ Next session not yet assigned. Go to <strong>Table Assignments</strong> and click <strong>Log Assignment</strong>.
+              </div>
+            )}
           </div>
-
-          {/* Past completed sessions */}
-          {completedSessions.length > 0 && (
-            <div className="card">
-              <div className="card-header">
-                <div className="card-title">Completed Sessions ({completedSessions.length})</div>
-              </div>
-              <div className="card-body">
-                {[...completedSessions].map(session => (
-                  <div key={session.sessionNo} style={{ marginBottom:16, paddingBottom:14, borderBottom:"1px solid var(--border2)" }}>
-                    <div style={{ fontSize:12, color:"var(--gold)", fontFamily:"var(--font-mono)", marginBottom:8, display:"flex", alignItems:"center", gap:10 }}>
-                      <span>S{session.sessionNo}</span>
-                      <span style={{ color:"var(--text3)", fontWeight:400 }}>{session.time}</span>
-                      <span className="badge badge-green" style={{fontSize:9,marginLeft:4}}>DONE</span>
-                    </div>
-                    <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
-                      {session.entries.map(e => (
-                        <div key={e.staffId} style={{ padding:"4px 10px", background:"var(--panel2)", border:"1px solid var(--border2)", borderRadius:6, fontSize:11 }}>
-                          <span style={{color:"var(--text)"}}>{e.name}</span>
-                          <span style={{color:"var(--text3)",margin:"0 4px"}}>→</span>
-                          <span style={{color: e.tableId==="X"?"var(--blue)":"var(--green)", fontFamily:"var(--font-mono)"}}>
-                            {e.tableId === "X" ? "Break" : e.tableId}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {completedSessions.length === 0 && currentEntries.length === 0 && (
-            <div className="empty-state"><div className="empty-icon">📋</div><p>No dealers assigned in this hall yet. Use Table Assignments to assign dealers to tables.</p></div>
-          )}
         </div>
       )}
 
@@ -2144,6 +2243,142 @@ function IncidentsPage({ incidents, user, tables, onAddIncident, onUpdateInciden
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function FloatManagementPage({ tables, chips, fills, houseFloat, onSetHouseFloat, onUpdateTable, transactions }) {
+  const totalTableFloat = tables.reduce((s, t) => s + (t.chipTotal || 0), 0);
+  const totalCapacity   = tables.reduce((s, t) => s + (t.floatCapacity || 0), 0);
+  const cageFloat       = houseFloat - totalTableFloat;
+  const [editFloat, setEditFloat] = useState(String(houseFloat));
+
+  function resetToCapacity() {
+    tables.forEach(t => {
+      if (t.floatCapacity) onUpdateTable(t.id, { chipTotal: t.floatCapacity, openingFloat: t.floatCapacity, chipBreakdown: null });
+    });
+  }
+
+  const approvedFills = (fills || []).filter(f => f.status === "approved");
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">Float Management</div>
+          <div className="section-sub">Total house float — tables + cage</div>
+        </div>
+        <button className="btn btn-outline" onClick={resetToCapacity}>🔄 Reset Floats to Capacity</button>
+      </div>
+
+      {/* Summary stats */}
+      <div className="stat-grid mb-20">
+        {[
+          { label: "Total House Float", value: fmt(houseFloat),      accent: "var(--gold)",  icon: "🏦", sub: "Editable total below" },
+          { label: "Table Floats",      value: fmt(totalTableFloat), accent: "var(--blue)",  icon: "🃏", sub: `${tables.filter(t=>t.status==="open").length} tables open` },
+          { label: "Cage Float",        value: fmt(cageFloat),       accent: cageFloat >= 0 ? "var(--green)" : "var(--red)", icon: "🔐", sub: "House float − table floats" },
+          { label: "Float Capacity",    value: fmt(totalCapacity),   accent: "var(--text2)", icon: "📐", sub: "Sum of all table capacities" },
+        ].map(s => (
+          <div key={s.label} className="stat-card" style={{ "--accent": s.accent }}>
+            <div className="stat-icon">{s.icon}</div>
+            <div className="stat-label">{s.label}</div>
+            <div className="stat-value" style={{ fontSize: 18 }}>{s.value}</div>
+            <div style={{ fontSize:10, color:"var(--text3)", marginTop:2 }}>{s.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Edit total float */}
+      <div className="card mb-16">
+        <div className="card-header"><div className="card-title">⚙️ Adjust Total House Float</div></div>
+        <div className="card-body">
+          <div style={{ display:"flex", gap:12, alignItems:"center", maxWidth:400 }}>
+            <input className="form-input" type="number" value={editFloat}
+              onChange={e => setEditFloat(e.target.value)}
+              style={{ flex:1, fontFamily:"var(--font-mono)", fontSize:16 }} />
+            <button className="btn btn-gold" onClick={() => { const v = Number(editFloat); if (v > 0) onSetHouseFloat(v); }}>
+              Update
+            </button>
+          </div>
+          <div style={{ marginTop:8, fontSize:11, color:"var(--text3)" }}>
+            Cage float = Total House Float − sum of all table chip totals. Fill requests automatically debit the cage when approved.
+          </div>
+        </div>
+      </div>
+
+      {/* Per-table float distribution */}
+      <div className="card mb-16">
+        <div className="card-header">
+          <div className="card-title">Table Float Distribution</div>
+          <div style={{ fontSize:11, color:"var(--text3)" }}>Each table's current chips vs opening float vs capacity</div>
+        </div>
+        <div className="card-body">
+          <table className="data-table">
+            <thead>
+              <tr><th>Table</th><th>Game</th><th>Status</th><th style={{textAlign:"right"}}>Capacity</th><th style={{textAlign:"right"}}>Opening Float</th><th style={{textAlign:"right"}}>Current Chips</th><th style={{textAlign:"right"}}>W/L</th></tr>
+            </thead>
+            <tbody>
+              {tables.map(t => {
+                const cap = t.floatCapacity || 0;
+                const open = t.openingFloat || 0;
+                const cur  = t.chipTotal || 0;
+                const wl   = cur - open;
+                return (
+                  <tr key={t.id}>
+                    <td className="text-mono text-gold">{t.id}</td>
+                    <td>{t.gameType}</td>
+                    <td><StatusBadge status={t.status} /></td>
+                    <td className="text-mono" style={{ textAlign:"right" }}>{fmt(cap)}</td>
+                    <td className="text-mono" style={{ textAlign:"right" }}>{open > 0 ? fmt(open) : <span style={{color:"var(--text3)"}}>—</span>}</td>
+                    <td className="text-mono text-gold" style={{ textAlign:"right", fontWeight:600 }}>{cur > 0 ? fmt(cur) : <span style={{color:"var(--text3)"}}>—</span>}</td>
+                    <td className="text-mono" style={{ textAlign:"right", color: wl >= 0 ? "var(--green)" : "var(--red)", fontWeight:600 }}>
+                      {open > 0 ? (wl >= 0 ? "+" : "") + fmt(wl) : <span style={{color:"var(--text3)"}}>—</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr style={{ background:"var(--gold-dim)", fontWeight:700 }}>
+                <td colSpan={3}>HOUSE TOTAL</td>
+                <td className="text-mono" style={{ textAlign:"right" }}>{fmt(totalCapacity)}</td>
+                <td className="text-mono" style={{ textAlign:"right" }}>{fmt(tables.reduce((s,t)=>s+(t.openingFloat||0),0))}</td>
+                <td className="text-mono text-gold" style={{ textAlign:"right" }}>{fmt(totalTableFloat)}</td>
+                <td className="text-mono" style={{ textAlign:"right", color: totalTableFloat - tables.reduce((s,t)=>s+(t.openingFloat||0),0) >= 0 ? "var(--green)" : "var(--red)" }}>
+                  {(()=>{ const d=totalTableFloat-tables.reduce((s,t)=>s+(t.openingFloat||0),0); return (d>=0?"+":"")+fmt(d); })()}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+
+      {/* Approved fills — cage debit history */}
+      <div className="card">
+        <div className="card-header">
+          <div className="card-title">Fill History — Cage Debits</div>
+          <div style={{ fontSize:11, color:"var(--text3)" }}>Each approved fill debits the cage float and credits the table</div>
+        </div>
+        <div className="card-body">
+          {approvedFills.length === 0
+            ? <div className="empty-state"><div className="empty-icon">🪙</div><p>No approved fills yet</p></div>
+            : <table className="data-table">
+                <thead><tr><th>Time</th><th>Table</th><th>Denomination</th><th style={{textAlign:"right"}}>Amount</th><th>Requested by</th></tr></thead>
+                <tbody>
+                  {approvedFills.map(f => (
+                    <tr key={f.id}>
+                      <td className="text-mono text-muted">{f.time}</td>
+                      <td className="text-mono text-gold">{f.tableId}</td>
+                      <td style={{ fontSize:11 }}>{f.denominationLabel || "—"}</td>
+                      <td className="text-mono" style={{ textAlign:"right", color:"var(--red)" }}>−{fmt(f.total || f.amount || 0)}</td>
+                      <td style={{ fontSize:11, color:"var(--text3)" }}>{f.requestedBy}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+          }
+        </div>
+      </div>
     </div>
   );
 }
@@ -2643,11 +2878,11 @@ function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpd
       const timeStr = now.toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit",hour12:false});
       if (mode === "open") {
         const total = chips.reduce((s,c) => s+c.value*(formCounts[c.id]||0), 0);
-        onUpdateTable(table.id, { status:"open", chipTotal: total||table.floatCapacity, openingFloat: total||table.floatCapacity, openedAt: timeStr, openedDate: dateStr });
+        onUpdateTable(table.id, { status:"open", chipTotal: total||table.floatCapacity, openingFloat: total||table.floatCapacity, openedAt: timeStr, openedDate: dateStr, chipBreakdown: { ...formCounts } });
         printTableOpenForm(table, chips, formCounts);
       } else {
         const total = chips.reduce((s,c) => s+c.value*(formCounts[c.id]||0), 0);
-        onUpdateTable(table.id, { status:"closed", chipTotal: total||table.chipTotal });
+        onUpdateTable(table.id, { status:"closed", chipTotal: total||table.chipTotal, chipBreakdown: { ...formCounts } });
         printTableCloseForm(table, chips, formCounts);
         // Reset to float capacity for next open
         setTimeout(() => onUpdateTable(table.id, { chipTotal: table.floatCapacity||table.chipTotal }), 500);
@@ -2670,7 +2905,7 @@ function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpd
             { label:"Current House Count",  value:fmt(totalCurrent),  accent:"var(--blue)",  icon:"🪙" },
             { label:"House Win / Loss",      value:fmt(houseWinLoss),  accent:houseWinLoss>=0?"var(--green)":"var(--red)", icon:"📊" },
             { label:"Tables",               value:String(tables.length), accent:"var(--gold)", icon:"🃏" },
-            { label:"Cage Reserve",         value:fmt(cageReserve),   accent:"var(--gold)",  icon:"🏦" },
+            { label:"Cage Float",            value:fmt(cageReserve),   accent: cageReserve >= 0 ? "var(--green)" : "var(--red)",  icon:"🔐" },
           ].map(s => (
             <div key={s.label} className="stat-card" style={{ "--accent":s.accent }}>
               <div className="stat-icon">{s.icon}</div>
@@ -2845,14 +3080,8 @@ function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpd
         )}
       </div>
         {canAll && (
-          <div style={{ marginTop: "1rem" }}>
-            <label style={{ color: "var(--text2)", fontSize: "0.8rem" }}>Cage Reserve (KES)</label>
-            <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.25rem" }}>
-              <input type="number" defaultValue={cageReserve}
-                style={{ background: "var(--panel2)", border: "1px solid var(--border)", color: "var(--text)", padding: "0.4rem 0.6rem", borderRadius: "var(--radius)", width: "160px" }}
-                onBlur={e => onSetCageReserve(Number(e.target.value))} />
-              <span style={{ color: "var(--text2)", fontSize: "0.8rem", alignSelf: "center" }}>Shift Manager only</span>
-            </div>
+          <div style={{ marginTop:"1rem", padding:"10px 14px", background:"var(--blue-dim)", border:"1px solid rgba(74,158,245,0.3)", borderRadius:"var(--radius)", fontSize:12, color:"var(--blue)" }}>
+            🏦 Cage Float = Total House Float − Table Floats. To adjust the total house float, go to <strong>Float Management</strong> in the Management menu.
           </div>
         )}
       </>
@@ -6607,6 +6836,9 @@ export default function CasinoOps() {
   const [notification, setNotification] = useState(null);
   const [rolePermissions, setRolePermissions] = useState(DEFAULT_ROLE_PERMISSIONS);
   const [cageReserve, setCageReserve] = useState(500000);
+  const [houseFloat, setHouseFloat] = useState(() =>
+    INITIAL_TABLES.reduce((s, t) => s + (t.floatCapacity || 0), 0) + 500000
+  );
   const [chipCountLog, setChipCountLog] = useState([]);
   const [customers, setCustomers] = useState(INITIAL_CUSTOMERS);
   const [tableSessionLogs, setTableSessionLogs] = useState({}); // { tableId: [session,...] }
@@ -6815,8 +7047,10 @@ export default function CasinoOps() {
         ...(ss.history || []),
       ],
     }));
+    // Reset all table floats to capacity for next day
+    setTables(ts => ts.map(t => ({ ...t, chipTotal: t.floatCapacity || 0, openingFloat: 0, openedAt: null, openedDate: null, chipBreakdown: null })));
     addActivity("shift_closed", `Shift closed — Net: ${fmt(net)}`, "🔒");
-    notify("Shift closed and archived", "🔒", "var(--blue)");
+    notify("Shift closed — table floats reset for next day", "🔒", "var(--blue)");
   }
 
   function addChipCount({ tableId, prevFloat, newFloat, diff, inspector }) {
@@ -6858,7 +7092,7 @@ export default function CasinoOps() {
       case "floor":
         return <FloorView tables={tables} halls={halls} staff={staff} onTableClick={t => setSelectedTable(t)} />;
       case "tables":
-        return <TablesPage tables={tables} halls={halls} staff={staff} onUpdateTable={updateTable} onOpenTableModal={() => {}} canEdit={canEditTables} />;
+        return <TablesPage tables={tables} halls={halls} staff={staff} onUpdateTable={updateTable} onOpenTableModal={() => {}} canEdit={canEditTables} chips={chips} />;
       case "staffing":
         return <StaffingPage staff={staff} halls={halls} onUpdateStaff={updateStaff} attendanceLog={attendanceLog} onCheckIn={checkIn} onCheckOut={checkOut} userRole={user.role} rolePermissions={rolePermissions} />;
       case "shift_control":
@@ -6867,8 +7101,10 @@ export default function CasinoOps() {
         return <BreakListPage staff={staff} tables={tables} user={user} halls={halls} onUpdateTable={updateTable} onAddIncident={addIncident} onAddFill={addFill} chips={chips} rolePermissions={rolePermissions} />;
       case "incidents":
         return <IncidentsPage incidents={incidents} user={user} tables={tables} onAddIncident={addIncident} onUpdateIncident={updateIncident} rolePermissions={rolePermissions} />;
+      case "float_mgmt":
+        return <FloatManagementPage tables={tables} chips={chips} fills={fills} houseFloat={houseFloat} onSetHouseFloat={setHouseFloat} onUpdateTable={updateTable} transactions={transactions} />;
       case "fills":
-        return <FillsPage fills={fills} tables={tables} user={user} chips={chips} onAddFill={addFill} onApproveFill={approveFill} onUpdateTable={updateTable} staff={staff} tableTransfers={tableTransfers} onAddTransfer={addTransfer} cageReserve={cageReserve} onSetCageReserve={setCageReserve} rolePermissions={rolePermissions} halls={halls} onAddChipCount={addChipCount} chipCountLog={chipCountLog} />;
+        return <FillsPage fills={fills} tables={tables} user={user} chips={chips} onAddFill={addFill} onApproveFill={approveFill} onUpdateTable={updateTable} staff={staff} tableTransfers={tableTransfers} onAddTransfer={addTransfer} cageReserve={houseFloat - tables.reduce((s,t)=>s+(t.chipTotal||0),0)} onSetCageReserve={v => setHouseFloat(tables.reduce((s,t)=>s+(t.chipTotal||0),0) + v)} rolePermissions={rolePermissions} halls={halls} onAddChipCount={addChipCount} chipCountLog={chipCountLog} />;
       case "reports":
         return <ReportsPage tables={tables} staff={staff} transactions={transactions} chipCountLog={chipCountLog} rolePermissions={rolePermissions} />;
       case "roster":
