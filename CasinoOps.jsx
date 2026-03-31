@@ -1054,16 +1054,33 @@ function TablesPage({ tables, halls, staff, onUpdateTable, onOpenTableModal, can
   );
 }
 
-function StaffingPage({ staff, halls, onUpdateStaff, attendanceLog, onCheckIn, onCheckOut, userRole, rolePermissions }) {
+function StaffingPage({ staff, halls, onUpdateStaff, attendanceLog, onCheckIn, onCheckOut, userRole, rolePermissions, shiftState }) {
   const [tab, setTab] = useState("attendance");
   const statusColor = { on_table:"var(--green)", break:"var(--blue)", checked_in:"var(--gold)", off_shift:"var(--text3)" };
   const isShiftMgr = hasPermission(userRole, "record_attendance", rolePermissions);
 
   // ── ATTENDANCE TAB ──────────────────────────────────────────────────────────
   function AttendanceTab() {
-    const [shiftType, setShiftType] = useState("Night");
+    // Default to the currently open shift type; fall back to "Night"
+    const openShiftType = shiftState?.status === "open" ? (shiftState.type || "Night") : "Night";
+    const [shiftType, setShiftType] = useState(openShiftType);
     const [searchName, setSearchName] = useState("");
-    const filtered = staff.filter(s => s.name.toLowerCase().includes(searchName.toLowerCase()));
+    const [rosterOnly, setRosterOnly] = useState(true);
+
+    // Derive roster-scheduled staff for this shift today
+    const today = new Date().getDate();
+    const month = new Date().getMonth() + 1;
+    const year  = new Date().getFullYear();
+    const shiftCode = shiftType === "Morning" ? "M" : shiftType === "Day" ? "D" : "N";
+    const rosterData    = generateRoster(staff, month, year);
+    const scheduledIds  = new Set(rosterData.filter(r => r.days[today] === shiftCode).map(r => r.staffId));
+    // Also include anyone already checked in for this shift (in case roster is not set)
+    const checkedInIds  = new Set((attendanceLog||[]).filter(l => l.shift === shiftType && !l.checkOut).map(l => l.staffId));
+
+    const base = rosterOnly
+      ? staff.filter(s => scheduledIds.has(s.id) || checkedInIds.has(s.id))
+      : staff;
+    const filtered = base.filter(s => s.name.toLowerCase().includes(searchName.toLowerCase()));
     const now = () => new Date().toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"});
 
     return (
@@ -1072,30 +1089,41 @@ function StaffingPage({ staff, halls, onUpdateStaff, attendanceLog, onCheckIn, o
           <div style={{ flex: 1, minWidth: 180 }}>
             <input className="form-input" placeholder="Search staff name..." value={searchName} onChange={e => setSearchName(e.target.value)} style={{ padding: "7px 12px" }} />
           </div>
-          <div style={{ display:"flex", gap:6 }}>
+          <div style={{ display:"flex", gap:6, alignItems:"center" }}>
             {["Morning","Day","Night"].map(s => (
               <button key={s} className={`btn btn-xs ${shiftType===s?"btn-gold":"btn-outline"}`} onClick={() => setShiftType(s)}>{s}</button>
             ))}
+            <button className={`btn btn-xs ${rosterOnly?"btn-blue":"btn-outline"}`} onClick={() => setRosterOnly(r => !r)} title="Toggle roster filter">
+              {rosterOnly ? "📋 Roster" : "👥 All"}
+            </button>
           </div>
         </div>
 
+        {shiftState?.status !== "open" && (
+          <div style={{ marginBottom:12, padding:"8px 12px", background:"var(--yellow-dim)", border:"1px solid var(--yellow)", borderRadius:"var(--radius)", fontSize:12, color:"var(--yellow)" }}>
+            ⚠ No shift currently open. Open a shift in Shift Control first. Showing {shiftType} Shift roster.
+          </div>
+        )}
+        {shiftState?.status === "open" && shiftState.type !== shiftType && (
+          <div style={{ marginBottom:12, padding:"8px 12px", background:"var(--blue-dim)", border:"1px solid var(--blue)", borderRadius:"var(--radius)", fontSize:12, color:"var(--blue)" }}>
+            ℹ Viewing {shiftType} roster. The open shift is <strong>{shiftState.type}</strong>.
+          </div>
+        )}
+
         <div className="card mb-16">
           <div className="card-header">
-            <div className="card-title">Staff Attendance — {shiftType} Shift</div>
+            <div className="card-title">
+              Staff Attendance — {shiftType} Shift
+              {rosterOnly && <span style={{ fontSize:10, color:"var(--gold)", marginLeft:8, fontWeight:400 }}>({scheduledIds.size} rostered)</span>}
+            </div>
             <div className="flex gap-8" style={{alignItems:"center"}}>
-              <div style={{ fontSize:11, color:"var(--text3)" }}>{staff.filter(s=>s.status!=="off_shift").length} active · {staff.filter(s=>s.status==="off_shift").length} off shift</div>
-              <button className="btn btn-xs btn-outline" title="Pull staff scheduled for this shift today from duty roster" onClick={() => {
-                const today = new Date().getDate();
-                const shiftCode = shiftType === "Morning" ? "M" : shiftType === "Day" ? "D" : "N";
-                // generateRoster to find who is on this shift today
-                const rosterData = generateRoster(staff, new Date().getMonth()+1, new Date().getFullYear());
-                const scheduledIds = rosterData.filter(r => r.days[today] === shiftCode).map(r => r.staffId);
-                // Only check in staff whose roster shows this shift today and who are currently off_shift
-                staff.filter(s => scheduledIds.includes(s.id) && s.status === "off_shift").forEach(s => {
+              <div style={{ fontSize:11, color:"var(--text3)" }}>{filtered.filter(s=>s.status!=="off_shift").length} active · {filtered.filter(s=>s.status==="off_shift").length} off</div>
+              <button className="btn btn-xs btn-outline" title="Mark all rostered off-shift staff as checked in for this shift" onClick={() => {
+                staff.filter(s => scheduledIds.has(s.id) && s.status === "off_shift").forEach(s => {
                   onCheckIn(s.id, shiftType);
                   onUpdateStaff(s.id, { status: "checked_in" });
                 });
-              }}>📋 Pull from Roster</button>
+              }}>📋 Bulk Check-In Roster</button>
             </div>
           </div>
           <div className="card-body">
@@ -1620,7 +1648,149 @@ function ShiftControlPage({ staff, tables, transactions, shiftState, onOpenShift
 }
 
 
-function BreakListPage({ staff, tables, user, halls, onUpdateTable, onAddIncident, onAddFill, chips, rolePermissions }) {
+// ── PIT BOSS QUICK ACTIONS (top-level to avoid timer re-render destroying state) ──
+function PitBossQuickActions({ hallTables, chips, onAddFill, onAddIncident, onUpdateTable, myHall, staff, user }) {
+  const [qaModal, setQaModal] = useState(null);
+  const [qaForm, setQaForm] = useState({});
+  const denom = chips?.find(c => c.id === (qaForm.denominationId || chips?.[0]?.id));
+  const fillTotal = denom ? denom.value * Number(qaForm.quantity || 0) : 0;
+
+  function doOpenTable() {
+    if (!qaForm.tableId) return;
+    onUpdateTable(qaForm.tableId, { status: "open" });
+    setQaModal(null); setQaForm({});
+  }
+  function doCloseTable() {
+    if (!qaForm.tableId) return;
+    onUpdateTable(qaForm.tableId, { status: "closed" });
+    setQaModal(null); setQaForm({});
+  }
+  function doFill() {
+    if (!qaForm.tableId || !qaForm.quantity) return;
+    onAddFill({ tableId: qaForm.tableId, denominationId: denom?.id, denominationLabel: `${denom?.color} (${denom?.value?.toLocaleString()})`, quantity: Number(qaForm.quantity), total: fillTotal, status: "pending", requestedBy: user.name, time: new Date().toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"}) });
+    setQaModal(null); setQaForm({});
+  }
+  function doIncident() {
+    if (!qaForm.tableId || !qaForm.description) return;
+    onAddIncident({ tableId: qaForm.tableId, type: qaForm.incidentType || "dispute", description: qaForm.description, reportedBy: user.name, time: new Date().toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"}), status: "open" });
+    setQaModal(null); setQaForm({});
+  }
+
+  const ACTIONS = [
+    { key: "open",     icon: "🟢", label: "Open Table",      color: "var(--green)",  desc: "Set a table status to Open" },
+    { key: "close",    icon: "🔴", label: "Close Table",     color: "var(--red)",    desc: "Set a table status to Closed" },
+    { key: "fill",     icon: "🪙", label: "Request Fill",    color: "var(--yellow)", desc: "Submit chip fill request" },
+    { key: "incident", icon: "⚠️", label: "Report Incident", color: "var(--orange)", desc: "Log an incident on a table" },
+  ];
+
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 20 }}>
+        {ACTIONS.map(a => (
+          <div key={a.key} onClick={() => { setQaModal(a.key); setQaForm({ tableId: hallTables[0]?.id || "", denominationId: chips?.[0]?.id, quantity: 20, incidentType: "dispute" }); }}
+            style={{ padding: 20, background: "var(--panel2)", border: `1px solid var(--border2)`, borderRadius: "var(--radius2)", cursor: "pointer", transition: "all 0.2s", textAlign: "center" }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = a.color; e.currentTarget.style.background = "var(--panel)"; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border2)"; e.currentTarget.style.background = "var(--panel2)"; }}>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>{a.icon}</div>
+            <div style={{ fontWeight: 600, fontSize: 14, color: a.color, marginBottom: 4 }}>{a.label}</div>
+            <div style={{ fontSize: 11, color: "var(--text3)" }}>{a.desc}</div>
+          </div>
+        ))}
+      </div>
+      <div className="card">
+        <div className="card-header"><div className="card-title">🏛 {myHall?.name || "My Hall"} — Table Status</div></div>
+        <div className="card-body">
+          <div className="table-grid">
+            {hallTables.map(t => {
+              const dealer = staff.find(s => s.id === t.dealerId);
+              return (
+                <div key={t.id} className={`table-card ${t.status}`}>
+                  <div className="table-id">{t.id}</div>
+                  <div className="table-game">{t.gameType}</div>
+                  <div className="table-status"><div className="status-dot" /><span style={{ fontSize: 9, color: "var(--text2)" }}>{t.status.replace("_"," ").toUpperCase()}</span></div>
+                  <div className="table-staff">{dealer ? dealer.name : "No dealer"}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+      {(qaModal === "open" || qaModal === "close") && (
+        <div className="modal-overlay" onClick={() => setQaModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header"><div className="modal-title">{qaModal === "open" ? "🟢 Open Table" : "🔴 Close Table"}</div><button className="modal-close" onClick={() => setQaModal(null)}>✕</button></div>
+            <div className="modal-body">
+              <div className="form-group"><label className="form-label">Select Table</label>
+                <select className="form-select" value={qaForm.tableId} onChange={e => setQaForm(f => ({ ...f, tableId: e.target.value }))}>
+                  {hallTables.map(t => <option key={t.id} value={t.id}>{t.id} — {t.gameType} ({t.status})</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setQaModal(null)}>Cancel</button>
+              <button className={`btn ${qaModal==="open"?"btn-green":"btn-red"}`} onClick={qaModal === "open" ? doOpenTable : doCloseTable}>Confirm {qaModal === "open" ? "Open" : "Close"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {qaModal === "fill" && (
+        <div className="modal-overlay" onClick={() => setQaModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header"><div className="modal-title">🪙 Request Chip Fill</div><button className="modal-close" onClick={() => setQaModal(null)}>✕</button></div>
+            <div className="modal-body">
+              <div className="form-group"><label className="form-label">Table</label>
+                <select className="form-select" value={qaForm.tableId} onChange={e => setQaForm(f => ({ ...f, tableId: e.target.value }))}>
+                  {hallTables.map(t => <option key={t.id} value={t.id}>{t.id} — {t.gameType}</option>)}
+                </select>
+              </div>
+              <div className="form-group"><label className="form-label">Denomination</label>
+                <select className="form-select" value={qaForm.denominationId} onChange={e => setQaForm(f => ({ ...f, denominationId: e.target.value }))}>
+                  {(chips || []).map(c => <option key={c.id} value={c.id}>{c.color} — {fmt(c.value)} each</option>)}
+                </select>
+              </div>
+              <div className="form-group"><label className="form-label">Quantity</label>
+                <input className="form-input" type="number" min="1" value={qaForm.quantity} onChange={e => setQaForm(f => ({ ...f, quantity: e.target.value }))} />
+              </div>
+              <div style={{ padding:"10px 14px", background:"var(--gold-dim)", borderRadius:"var(--radius)", fontSize:13 }}>Total: <strong className="text-mono text-gold">{fmt(fillTotal)}</strong></div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setQaModal(null)}>Cancel</button>
+              <button className="btn btn-gold" onClick={doFill}>Submit Fill Request</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {qaModal === "incident" && (
+        <div className="modal-overlay" onClick={() => setQaModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header"><div className="modal-title">⚠️ Report Incident</div><button className="modal-close" onClick={() => setQaModal(null)}>✕</button></div>
+            <div className="modal-body">
+              <div className="form-group"><label className="form-label">Table</label>
+                <select className="form-select" value={qaForm.tableId} onChange={e => setQaForm(f => ({ ...f, tableId: e.target.value }))}>
+                  {hallTables.map(t => <option key={t.id} value={t.id}>{t.id} — {t.gameType}</option>)}
+                </select>
+              </div>
+              <div className="form-group"><label className="form-label">Incident Type</label>
+                <select className="form-select" value={qaForm.incidentType} onChange={e => setQaForm(f => ({ ...f, incidentType: e.target.value }))}>
+                  {["dispute","security","equipment","unusual_win"].map(t => <option key={t} value={t}>{t.replace(/_/g," ").toUpperCase()}</option>)}
+                </select>
+              </div>
+              <div className="form-group"><label className="form-label">Description</label>
+                <textarea className="form-textarea" value={qaForm.description || ""} onChange={e => setQaForm(f => ({ ...f, description: e.target.value }))} placeholder="Describe the incident..." />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setQaModal(null)}>Cancel</button>
+              <button className="btn btn-red" onClick={doIncident} disabled={!qaForm.description}>Submit Report</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BreakListPage({ staff, tables, user, halls, onUpdateTable, onAddIncident, onAddFill, chips, rolePermissions, onNotify }) {
   const [tab, setTab] = useState("breaklist");
 
   // Determine pit boss's hall from their staff profile
@@ -1655,7 +1825,7 @@ function BreakListPage({ staff, tables, user, halls, onUpdateTable, onAddInciden
           const hasNextAssignments = Object.keys(nextAssignments).length > 0;
           if (!hasNextAssignments) {
             // Push notification to pit boss and shift manager
-            notify("🔴 Rotation Due — No next session assignment logged!", "🔴", "var(--red)");
+            onNotify?.("🔴 Rotation Due — No next session assignment logged!", "🔴", "var(--red)");
           }
           return 0;
         }
@@ -1679,7 +1849,7 @@ function BreakListPage({ staff, tables, user, halls, onUpdateTable, onAddInciden
     setNextAssignments({});
     setSessionElapsed(0);
     if (nextNo <= SESSION_COUNT) {
-      notify(`🔄 Session ${nextNo} started — log next assignments`, "🔄", "var(--gold)");
+      onNotify?.(`🔄 Session ${nextNo} started — log next assignments`, "🔄", "var(--gold)");
     }
   }
 
@@ -1729,7 +1899,7 @@ function BreakListPage({ staff, tables, user, halls, onUpdateTable, onAddInciden
       newNext[s.id] = tbl?.id || "X";
     });
     setNextAssignments(newNext);
-    notify(`Session S${Math.min(currentSessionNo + 1, SESSION_COUNT)} assignments logged`, "📋", "var(--gold)");
+    onNotify?.(`Session S${Math.min(currentSessionNo + 1, SESSION_COUNT)} assignments logged`, "📋", "var(--gold)");
   }
 
   // ── TABLE ASSIGNMENTS TAB ─────────────────────────────────────────────────
@@ -1795,147 +1965,6 @@ function BreakListPage({ staff, tables, user, halls, onUpdateTable, onAddInciden
     );
   }
 
-  // ── QUICK ACTIONS TAB ─────────────────────────────────────────────────────
-  function QuickActionsTab() {
-    const [qaModal, setQaModal] = useState(null);
-    const [qaForm, setQaForm] = useState({});
-    const denom = chips?.find(c => c.id === (qaForm.denominationId || chips?.[0]?.id));
-    const fillTotal = denom ? denom.value * Number(qaForm.quantity || 0) : 0;
-
-    function doOpenTable() {
-      if (!qaForm.tableId) return;
-      onUpdateTable(qaForm.tableId, { status: "open" });
-      setQaModal(null); setQaForm({});
-    }
-    function doCloseTable() {
-      if (!qaForm.tableId) return;
-      onUpdateTable(qaForm.tableId, { status: "closed" });
-      setQaModal(null); setQaForm({});
-    }
-    function doFill() {
-      if (!qaForm.tableId || !qaForm.quantity) return;
-      onAddFill({ tableId: qaForm.tableId, denominationId: denom?.id, denominationLabel: `${denom?.color} (${denom?.value?.toLocaleString()})`, quantity: Number(qaForm.quantity), total: fillTotal, status: "pending", requestedBy: user.name, time: new Date().toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"}) });
-      setQaModal(null); setQaForm({});
-    }
-    function doIncident() {
-      if (!qaForm.tableId || !qaForm.description) return;
-      onAddIncident({ tableId: qaForm.tableId, type: qaForm.incidentType || "dispute", description: qaForm.description, reportedBy: user.name, time: new Date().toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"}), status: "open" });
-      setQaModal(null); setQaForm({});
-    }
-
-    const ACTIONS = [
-      { key: "open",     icon: "🟢", label: "Open Table",      color: "var(--green)",  desc: "Set a table status to Open" },
-      { key: "close",    icon: "🔴", label: "Close Table",     color: "var(--red)",    desc: "Set a table status to Closed" },
-      { key: "fill",     icon: "🪙", label: "Request Fill",    color: "var(--yellow)", desc: "Submit chip fill request" },
-      { key: "incident", icon: "⚠️", label: "Report Incident", color: "var(--orange)", desc: "Log an incident on a table" },
-    ];
-
-    return (
-      <div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 20 }}>
-          {ACTIONS.map(a => (
-            <div key={a.key} onClick={() => { setQaModal(a.key); setQaForm({ tableId: hallTables[0]?.id || "", denominationId: chips?.[0]?.id, quantity: 20, incidentType: "dispute" }); }}
-              style={{ padding: 20, background: "var(--panel2)", border: `1px solid var(--border2)`, borderRadius: "var(--radius2)", cursor: "pointer", transition: "all 0.2s", textAlign: "center" }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor = a.color; e.currentTarget.style.background = "var(--panel)"; }}
-              onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border2)"; e.currentTarget.style.background = "var(--panel2)"; }}>
-              <div style={{ fontSize: 32, marginBottom: 8 }}>{a.icon}</div>
-              <div style={{ fontWeight: 600, fontSize: 14, color: a.color, marginBottom: 4 }}>{a.label}</div>
-              <div style={{ fontSize: 11, color: "var(--text3)" }}>{a.desc}</div>
-            </div>
-          ))}
-        </div>
-        <div className="card">
-          <div className="card-header"><div className="card-title">🏛 {myHall?.name || "My Hall"} — Table Status</div></div>
-          <div className="card-body">
-            <div className="table-grid">
-              {hallTables.map(t => {
-                const dealer = staff.find(s => s.id === t.dealerId);
-                return (
-                  <div key={t.id} className={`table-card ${t.status}`}>
-                    <div className="table-id">{t.id}</div>
-                    <div className="table-game">{t.gameType}</div>
-                    <div className="table-status"><div className="status-dot" /><span style={{ fontSize: 9, color: "var(--text2)" }}>{t.status.replace("_"," ").toUpperCase()}</span></div>
-                    <div className="table-staff">{dealer ? dealer.name : "No dealer"}</div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-        {(qaModal === "open" || qaModal === "close") && (
-          <div className="modal-overlay" onClick={() => setQaModal(null)}>
-            <div className="modal" onClick={e => e.stopPropagation()}>
-              <div className="modal-header"><div className="modal-title">{qaModal === "open" ? "🟢 Open Table" : "🔴 Close Table"}</div><button className="modal-close" onClick={() => setQaModal(null)}>✕</button></div>
-              <div className="modal-body">
-                <div className="form-group"><label className="form-label">Select Table</label>
-                  <select className="form-select" value={qaForm.tableId} onChange={e => setQaForm(f => ({ ...f, tableId: e.target.value }))}>
-                    {hallTables.map(t => <option key={t.id} value={t.id}>{t.id} — {t.gameType} ({t.status})</option>)}
-                  </select>
-                </div>
-              </div>
-              <div className="modal-footer">
-                <button className="btn btn-outline" onClick={() => setQaModal(null)}>Cancel</button>
-                <button className={`btn ${qaModal==="open"?"btn-green":"btn-red"}`} onClick={qaModal === "open" ? doOpenTable : doCloseTable}>Confirm {qaModal === "open" ? "Open" : "Close"}</button>
-              </div>
-            </div>
-          </div>
-        )}
-        {qaModal === "fill" && (
-          <div className="modal-overlay" onClick={() => setQaModal(null)}>
-            <div className="modal" onClick={e => e.stopPropagation()}>
-              <div className="modal-header"><div className="modal-title">🪙 Request Chip Fill</div><button className="modal-close" onClick={() => setQaModal(null)}>✕</button></div>
-              <div className="modal-body">
-                <div className="form-group"><label className="form-label">Table</label>
-                  <select className="form-select" value={qaForm.tableId} onChange={e => setQaForm(f => ({ ...f, tableId: e.target.value }))}>
-                    {hallTables.map(t => <option key={t.id} value={t.id}>{t.id} — {t.gameType}</option>)}
-                  </select>
-                </div>
-                <div className="form-group"><label className="form-label">Denomination</label>
-                  <select className="form-select" value={qaForm.denominationId} onChange={e => setQaForm(f => ({ ...f, denominationId: e.target.value }))}>
-                    {(chips || []).map(c => <option key={c.id} value={c.id}>{c.color} — {fmt(c.value)} each</option>)}
-                  </select>
-                </div>
-                <div className="form-group"><label className="form-label">Quantity</label>
-                  <input className="form-input" type="number" min="1" value={qaForm.quantity} onChange={e => setQaForm(f => ({ ...f, quantity: e.target.value }))} />
-                </div>
-                <div style={{ padding:"10px 14px", background:"var(--gold-dim)", borderRadius:"var(--radius)", fontSize:13 }}>Total: <strong className="text-mono text-gold">{fmt(fillTotal)}</strong></div>
-              </div>
-              <div className="modal-footer">
-                <button className="btn btn-outline" onClick={() => setQaModal(null)}>Cancel</button>
-                <button className="btn btn-gold" onClick={doFill}>Submit Fill Request</button>
-              </div>
-            </div>
-          </div>
-        )}
-        {qaModal === "incident" && (
-          <div className="modal-overlay" onClick={() => setQaModal(null)}>
-            <div className="modal" onClick={e => e.stopPropagation()}>
-              <div className="modal-header"><div className="modal-title">⚠️ Report Incident</div><button className="modal-close" onClick={() => setQaModal(null)}>✕</button></div>
-              <div className="modal-body">
-                <div className="form-group"><label className="form-label">Table</label>
-                  <select className="form-select" value={qaForm.tableId} onChange={e => setQaForm(f => ({ ...f, tableId: e.target.value }))}>
-                    {hallTables.map(t => <option key={t.id} value={t.id}>{t.id} — {t.gameType}</option>)}
-                  </select>
-                </div>
-                <div className="form-group"><label className="form-label">Incident Type</label>
-                  <select className="form-select" value={qaForm.incidentType} onChange={e => setQaForm(f => ({ ...f, incidentType: e.target.value }))}>
-                    {["dispute","security","equipment","unusual_win"].map(t => <option key={t} value={t}>{t.replace(/_/g," ").toUpperCase()}</option>)}
-                  </select>
-                </div>
-                <div className="form-group"><label className="form-label">Description</label>
-                  <textarea className="form-textarea" value={qaForm.description || ""} onChange={e => setQaForm(f => ({ ...f, description: e.target.value }))} placeholder="Describe the incident..." />
-                </div>
-              </div>
-              <div className="modal-footer">
-                <button className="btn btn-outline" onClick={() => setQaModal(null)}>Cancel</button>
-                <button className="btn btn-red" onClick={doIncident} disabled={!qaForm.description}>Submit Report</button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
 
   return (
     <div>
@@ -2081,7 +2110,7 @@ function BreakListPage({ staff, tables, user, halls, onUpdateTable, onAddInciden
         </div>
       )}
 
-      {tab === "quickactions" && <QuickActionsTab />}
+      {tab === "quickactions" && <PitBossQuickActions hallTables={hallTables} chips={chips} onAddFill={onAddFill} onAddIncident={onAddIncident} onUpdateTable={onUpdateTable} myHall={myHall} staff={staff} user={user} />}
     </div>
   );
 }
@@ -2383,7 +2412,7 @@ function FloatManagementPage({ tables, chips, fills, houseFloat, onSetHouseFloat
   );
 }
 
-function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpdateTable, staff, tableTransfers, onAddTransfer, cageReserve, onSetCageReserve, rolePermissions, halls, onAddChipCount, chipCountLog }) {
+function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpdateTable, staff, tableTransfers, onAddTransfer, cageReserve, onSetCageReserve, rolePermissions, halls, onAddChipCount, chipCountLog, casinoInfo }) {
   const [tab, setTab] = useState("fills");
   const canRequest = hasPermission(user.role, "request_fills", rolePermissions);
   const canApprove = hasPermission(user.role, "approve_fills", rolePermissions);
@@ -2451,6 +2480,8 @@ function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpd
     const dateStr = now.toLocaleDateString("en-KE",{day:"2-digit",month:"2-digit",year:"2-digit"});
     const timeStr = now.toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit",hour12:false});
     const tableName = table.tableName || table.gameType;
+    const cName = casinoInfo?.name || "Grand Casino";
+    const cAddr  = casinoInfo?.address || "";
     const denomRows = chips.map(c => {
       const cnt = openingCounts?.[c.id] || "";
       return `<tr><td style="text-align:right;font-weight:600">${c.value.toLocaleString()}</td><td style="text-align:center">${cnt}</td></tr>`;
@@ -2460,8 +2491,9 @@ function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpd
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid #000">
         <div style="padding:14px;border-right:1px solid #000">
           <div style="font-size:15px;font-weight:700;margin-bottom:4px">FLOAT OPENING</div>
-          <div style="font-size:13px;font-weight:600">Table; ${tableName}</div>
-          <div style="font-size:12px">Pujing Casino</div>
+          <div style="font-size:13px;font-weight:600">Table: ${tableName}</div>
+          <div style="font-size:12px;font-weight:700">${cName}</div>
+          ${cAddr ? `<div style="font-size:10px;color:#666">${cAddr}</div>` : ""}
           <div style="font-size:11px;margin-top:4px">${dateStr}</div>
           <div style="font-size:11px">${timeStr}</div>
         </div>
@@ -2491,11 +2523,13 @@ function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpd
     const dateStr = now.toLocaleDateString("en-KE",{day:"2-digit",month:"2-digit",year:"2-digit"});
     const timeStr = now.toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit",hour12:false});
     const tableName = table.tableName || table.gameType;
+    const cName = casinoInfo?.name || "Grand Casino";
     const openTotal = table.openingFloat || table.floatCapacity || 0;
     const closeTotal = closingCounts ? chips.reduce((s,c)=>s+c.value*(closingCounts[c.id]||0),0) : (table.chipTotal||0);
     const result = closeTotal - openTotal;
+    const openBreakdown = table.chipBreakdown || {};
     const denomRows = chips.map(c => {
-      const openCnt = ""; // opening count blanks
+      const openCnt = openBreakdown[c.id] || "";
       const closeCnt = closingCounts?.[c.id] || "";
       return `<tr><td style="text-align:right;font-weight:600">${c.value.toLocaleString()}</td><td style="text-align:center">${openCnt}</td><td style="text-align:center">${closeCnt}</td></tr>`;
     }).join('');
@@ -2503,15 +2537,15 @@ function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpd
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid #000">
         <div style="padding:14px;border-right:1px solid #000">
           <div style="font-size:15px;font-weight:700;margin-bottom:4px">FLOAT OPENING</div>
-          <div style="font-size:13px;font-weight:600">Table; ${tableName}</div>
-          <div style="font-size:12px">Pujing Casino</div>
+          <div style="font-size:13px;font-weight:600">Table: ${tableName}</div>
+          <div style="font-size:12px;font-weight:700">${cName}</div>
           <div style="font-size:11px;margin-top:4px">${table.openedDate||dateStr}</div>
           <div style="font-size:11px">${table.openedAt||"—"}</div>
         </div>
         <div style="padding:14px">
           <div style="font-size:15px;font-weight:700;margin-bottom:4px">FLOAT CLOSING</div>
-          <div style="font-size:13px;font-weight:600">Table; ${tableName}</div>
-          <div style="font-size:12px">Pujing Casino</div>
+          <div style="font-size:13px;font-weight:600">Table: ${tableName}</div>
+          <div style="font-size:12px;font-weight:700">${cName}</div>
           <div style="font-size:11px;margin-top:4px">${dateStr}</div>
           <div style="font-size:11px">${timeStr}</div>
         </div>
@@ -2543,14 +2577,17 @@ function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpd
   // ── HOUSE OPEN FORM print (summary of all tables) ─────────────────────────
   function printHouseOpenForm(tables, chips) {
     const now = new Date().toLocaleString("en-KE");
+    const cName = casinoInfo?.name || "Grand Casino";
     const rows = tables.map(t => {
       const cap = t.floatCapacity || t.chipTotal || 0;
-      return `<tr><td>${t.id}</td><td>${t.tableName||t.gameType}</td><td style="text-align:right">${cap.toLocaleString()}</td>${chips.map(c=>`<td style="text-align:center">___</td>`).join('')}<td style="text-align:right">___</td><td style="text-align:right">___</td></tr>`;
+      const bd = t.chipBreakdown || {};
+      const denomCells = chips.map(c => `<td style="text-align:center">${bd[c.id] !== undefined ? bd[c.id] : "___"}</td>`).join('');
+      return `<tr><td>${t.id}</td><td>${t.tableName||t.gameType}</td><td style="text-align:right">${cap.toLocaleString()}</td>${denomCells}<td style="text-align:right">___</td><td style="text-align:right">___</td></tr>`;
     }).join('');
     const chipHeaders = chips.map(c=>`<th style="text-align:center">${c.color}<br/>(${c.value.toLocaleString()})</th>`).join('');
     printDoc(`
       <h2>HOUSE OPENING — CHIP COUNT FORM</h2>
-      <div class="sub">CasinoOps · ${now}</div>
+      <div class="sub">${cName} · ${now}</div>
       <table>
         <thead><tr><th>Table</th><th>Game</th><th>Float Capacity</th>${chipHeaders}<th>Actual Count</th><th>Variance</th></tr></thead>
         <tbody>${rows}</tbody>
@@ -2567,20 +2604,39 @@ function FillsPage({ fills, tables, user, chips, onAddFill, onApproveFill, onUpd
   // ── HOUSE CLOSE FORM print ────────────────────────────────────────────────
   function printHouseCloseForm(tables, chips) {
     const now = new Date().toLocaleString("en-KE");
+    const cName = casinoInfo?.name || "Grand Casino";
+    const chipHeaders = chips.map(c=>`<th style="text-align:center">${c.color}<br/>(${c.value.toLocaleString()})</th>`).join('');
     const rows = tables.map(t => {
       const cap = t.floatCapacity || t.chipTotal || 0;
-      const result = (t.chipTotal||0) - cap;
-      return `<tr><td>${t.id}</td><td>${t.tableName||t.gameType}</td><td style="text-align:right">${(t.chipTotal||0).toLocaleString()}</td><td style="text-align:right">${cap.toLocaleString()}</td><td style="text-align:right;color:${result>=0?'green':'red'}">${result>=0?'+':''}${result.toLocaleString()}</td></tr>`;
+      const closingTotal = t.chipTotal || 0;
+      const result = closingTotal - cap;
+      const bd = t.chipBreakdown || {};
+      const denomCells = chips.map(c => `<td style="text-align:center">${bd[c.id] !== undefined ? bd[c.id] : "___"}</td>`).join('');
+      return `<tr><td>${t.id}</td><td>${t.tableName||t.gameType}</td>${denomCells}<td style="text-align:right">${closingTotal.toLocaleString()}</td><td style="text-align:right">${cap.toLocaleString()}</td><td style="text-align:right;color:${result>=0?'green':'red'}">${result>=0?'+':''}${result.toLocaleString()}</td></tr>`;
     }).join('');
+    const totalClose = tables.reduce((s,t)=>s+(t.chipTotal||0),0);
+    const totalCap   = tables.reduce((s,t)=>s+(t.floatCapacity||t.chipTotal||0),0);
+    const totalWL    = totalClose - totalCap;
     printDoc(`
       <h2>HOUSE CLOSING — CHIP COUNT FORM</h2>
-      <div class="sub">CasinoOps · ${now}</div>
-      <p style="margin-bottom:12px;font-size:11px;color:#555">Closing Count vs Float Capacity = Table Win/Loss for the day. Tables reset to Float Capacity at next opening.</p>
+      <div class="sub">${cName} · ${now}</div>
+      <p style="margin-bottom:12px;font-size:11px;color:#555">Closing Count vs Float Capacity = Table Win/Loss for the shift.</p>
       <table>
-        <thead><tr><th>Table</th><th>Game</th><th>Closing Count</th><th>Float Capacity</th><th>Win / Loss</th></tr></thead>
+        <thead><tr><th>Table</th><th>Game</th>${chipHeaders}<th>Closing Count</th><th>Float Capacity</th><th>Win / Loss</th></tr></thead>
         <tbody>${rows}</tbody>
-        <tfoot><tr class="total-row"><td colspan="2">HOUSE TOTAL</td><td style="text-align:right">${tables.reduce((s,t)=>s+(t.chipTotal||0),0).toLocaleString()}</td><td style="text-align:right">${tables.reduce((s,t)=>s+(t.floatCapacity||t.chipTotal||0),0).toLocaleString()}</td><td style="text-align:right">___________</td></tr></tfoot>
+        <tfoot>
+          <tr class="total-row">
+            <td colspan="2">HOUSE TOTAL</td>
+            ${chips.map(()=>'<td></td>').join('')}
+            <td style="text-align:right">${totalClose.toLocaleString()}</td>
+            <td style="text-align:right">${totalCap.toLocaleString()}</td>
+            <td style="text-align:right;font-weight:700;color:${totalWL>=0?'green':'red'}">${totalWL>=0?'+':''}${totalWL.toLocaleString()}</td>
+          </tr>
+        </tfoot>
       </table>
+      <div style="margin:16px 0;padding:12px;background:${totalWL>=0?'#e6fff0':'#fff0f0'};border-radius:4px;font-size:14px;font-weight:700;text-align:center">
+        TOTAL HOUSE ${totalWL >= 0 ? 'WIN' : 'LOSS'}: ${totalWL >= 0 ? '+' : ''}${totalWL.toLocaleString()} KES
+      </div>
       <div class="sig-row">
         <div class="sig-box">Shift Manager<br><br><br>Signature &amp; Date:</div>
         <div class="sig-box">Pit Boss<br><br><br>Signature &amp; Date:</div>
@@ -4391,7 +4447,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
   staff:         ["view_dashboard","perform_chip_count","log_customer","dealer_rotation"],
 };
 
-function AdminPage({ users, onAddUser, onUpdateUser, onDeleteUser, halls, onAddHall, onUpdateHall, onDeleteHall, tables, onAddTable, onUpdateTable, onDeleteTable, chips, onAddChip, onUpdateChip, onDeleteChip, shifts, onUpdateShift, staff, rolePermissions, setRolePermissions }) {
+function AdminPage({ users, onAddUser, onUpdateUser, onDeleteUser, halls, onAddHall, onUpdateHall, onDeleteHall, tables, onAddTable, onUpdateTable, onDeleteTable, chips, onAddChip, onUpdateChip, onDeleteChip, shifts, onUpdateShift, staff, rolePermissions, setRolePermissions, casinoInfo, setCasinoInfo, formTemplates, setFormTemplates }) {
   const [tab, setTab] = useState("users");
   const [modal, setModal] = useState(null); // { type, data? }
   const [adminConfirm, setAdminConfirm] = useState(null); // { title, message, onConfirm }
@@ -4404,14 +4460,6 @@ function AdminPage({ users, onAddUser, onUpdateUser, onDeleteUser, halls, onAddH
     { key: "gi_report",    label: "GI Report" },
     { key: "transfer",     label: "Table Transfer Form" },
   ];
-  const [casinoInfo, setCasinoInfo] = useState({ name: "Grand Casino", address: "", phone: "", email: "", regNo: "" });
-  const [formTemplates, setFormTemplates] = useState(() => {
-    const map = {};
-    ["open_float","close_float","fill_request","gi_report","transfer"].forEach(k => {
-      map[k] = { customHeader: "", customFooter: "", notes: "" };
-    });
-    return map;
-  });
   const [formsFormKey, setFormsFormKey] = useState("open_float");
 
   function FormsEditorTab() {
@@ -4838,11 +4886,22 @@ function AdminPage({ users, onAddUser, onUpdateUser, onDeleteUser, halls, onAddH
   // ── TABLE MODAL ──
   function TableConfigModal({ data, onClose }) {
     const editing = !!data;
-    const [form, setForm] = useState(data || { id: "", tableName: "", hallId: halls[0]?.id || "", gameType: "Blackjack", status: "closed", minBet: 500, maxBet: 10000, chipTotal: 100000, floatCapacity: 100000, openingFloat: 100000 });
+    const [form, setForm] = useState(data || { id: "", tableName: "", hallId: halls[0]?.id || "", gameType: "Blackjack", status: "closed", minBet: 500, maxBet: 10000, chipTotal: 100000, floatCapacity: 100000, openingFloat: 100000, chipBreakdown: {} });
     const GAMES = ["Blackjack","Roulette","Baccarat","Poker","Craps","Sic Bo"];
+
+    // Chip breakdown quantities — auto-calc chipTotal and floatCapacity from denomination qtys
+    const chipBreakdown = form.chipBreakdown || {};
+    const calcTotal = chips.reduce((s,c) => s + c.value * (Number(chipBreakdown[c.id])||0), 0);
+    const hasBreakdown = chips.some(c => (chipBreakdown[c.id]||0) > 0);
+
+    function setDenomQty(chipId, qty) {
+      const newBd = { ...chipBreakdown, [chipId]: Number(qty) || 0 };
+      const newTotal = chips.reduce((s,c) => s + c.value * (Number(newBd[c.id])||0), 0);
+      setForm(f => ({ ...f, chipBreakdown: newBd, chipTotal: newTotal, floatCapacity: newTotal, openingFloat: newTotal }));
+    }
+
     function save() {
       if (!form.id || !form.hallId) return;
-      // Ensure floatCapacity and openingFloat sync if not explicitly set
       const toSave = { ...form, floatCapacity: form.floatCapacity || form.chipTotal, openingFloat: form.openingFloat || form.chipTotal };
       editing ? onUpdateTable(form.id, toSave) : onAddTable(toSave);
       onClose();
@@ -4876,20 +4935,44 @@ function AdminPage({ users, onAddUser, onUpdateUser, onDeleteUser, halls, onAddH
               <div className="form-group"><label className="form-label">Max Bet (KES)</label><input className="form-input" type="number" value={form.maxBet} onChange={e => setForm(f=>({...f,maxBet:Number(e.target.value)}))} /></div>
             </div>
             <div style={{ padding:"10px 12px", background:"var(--gold-dim)", border:"1px solid var(--border)", borderRadius:"var(--radius)", marginBottom:12 }}>
-              <div style={{ fontSize:10, letterSpacing:1, color:"var(--gold)", textTransform:"uppercase", marginBottom:8 }}>Float Profile</div>
-              <div className="form-row">
-                <div className="form-group"><label className="form-label">Standard Float Capacity (KES)</label>
-                  <input className="form-input" type="number" value={form.floatCapacity||0} onChange={e => setForm(f=>({...f,floatCapacity:Number(e.target.value)}))} placeholder="Maximum float for this table" />
-                  <div style={{ fontSize:10, color:"var(--text3)", marginTop:3 }}>This is the amount the table resets to after each day close.</div>
+              <div style={{ fontSize:10, letterSpacing:1, color:"var(--gold)", textTransform:"uppercase", marginBottom:8 }}>Float Profile — Chip Denominations</div>
+              <div style={{ fontSize:11, color:"var(--text3)", marginBottom:10 }}>Enter chip quantities per denomination. Float total is calculated automatically.</div>
+              {chips.length === 0
+                ? <div style={{ fontSize:11, color:"var(--text3)" }}>No chip denominations configured. Add chips in Admin → Chips first.</div>
+                : <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))", gap:8, marginBottom:10 }}>
+                    {chips.map(c => (
+                      <div key={c.id} style={{ padding:"8px 10px", background:"var(--panel)", borderRadius:"var(--radius)", border:"1px solid var(--border2)" }}>
+                        <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4 }}>
+                          <div style={{ width:12, height:12, borderRadius:"50%", background:c.hex||"#aaa", border:"1px solid rgba(255,255,255,0.2)", flexShrink:0 }} />
+                          <span style={{ fontSize:11, fontWeight:600, color:"var(--text)" }}>{c.color}</span>
+                          <span style={{ fontSize:10, color:"var(--text3)", marginLeft:"auto" }}>{c.value.toLocaleString()} ea</span>
+                        </div>
+                        <input className="form-input" type="number" min="0"
+                          value={chipBreakdown[c.id] || 0}
+                          onChange={e => setDenomQty(c.id, e.target.value)}
+                          style={{ fontSize:12, padding:"4px 8px" }} />
+                        {(chipBreakdown[c.id]||0) > 0 && (
+                          <div style={{ fontSize:10, color:"var(--gold)", marginTop:3 }}>= {(c.value*(chipBreakdown[c.id]||0)).toLocaleString()}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+              }
+              {hasBreakdown && (
+                <div style={{ padding:"8px 12px", background:"var(--panel)", borderRadius:"var(--radius)", fontSize:13, fontWeight:600 }}>
+                  Float Total: <span style={{ color:"var(--gold)", fontFamily:"var(--font-mono)" }}>{calcTotal.toLocaleString()} KES</span>
                 </div>
-                <div className="form-group"><label className="form-label">Opening Float (KES)</label>
-                  <input className="form-input" type="number" value={form.openingFloat||form.floatCapacity||0} onChange={e => setForm(f=>({...f,openingFloat:Number(e.target.value)}))} placeholder="Actual chips loaded at open" />
-                  <div style={{ fontSize:10, color:"var(--text3)", marginTop:3 }}>Actual chips verified at opening. Usually equals capacity.</div>
+              )}
+              {!hasBreakdown && (
+                <div className="form-row" style={{ marginTop:8 }}>
+                  <div className="form-group"><label className="form-label">Float Capacity (KES)</label>
+                    <input className="form-input" type="number" value={form.floatCapacity||0} onChange={e => setForm(f=>({...f,floatCapacity:Number(e.target.value)}))} />
+                  </div>
+                  <div className="form-group"><label className="form-label">Opening Float (KES)</label>
+                    <input className="form-input" type="number" value={form.openingFloat||form.floatCapacity||0} onChange={e => setForm(f=>({...f,openingFloat:Number(e.target.value)}))} />
+                  </div>
                 </div>
-              </div>
-              <div className="form-group" style={{ marginBottom:0 }}><label className="form-label">Current Chip Count (KES)</label>
-                <input className="form-input" type="number" value={form.chipTotal||0} onChange={e => setForm(f=>({...f,chipTotal:Number(e.target.value)}))} placeholder="Live chip total (updated by chip counts)" />
-              </div>
+              )}
             </div>
             <div className="form-group">
               <label className="form-label">Status</label>
@@ -6842,6 +6925,14 @@ export default function CasinoOps() {
   const [chipCountLog, setChipCountLog] = useState([]);
   const [customers, setCustomers] = useState(INITIAL_CUSTOMERS);
   const [tableSessionLogs, setTableSessionLogs] = useState({}); // { tableId: [session,...] }
+  const [casinoInfo, setCasinoInfo] = useState({ name: "Grand Casino", address: "", phone: "", email: "", regNo: "" });
+  const [formTemplates, setFormTemplates] = useState({
+    open_float: { customHeader: "", customFooter: "", notes: "" },
+    close_float: { customHeader: "", customFooter: "", notes: "" },
+    fill_request: { customHeader: "", customFooter: "", notes: "" },
+    gi_report: { customHeader: "", customFooter: "", notes: "" },
+    transfer: { customHeader: "", customFooter: "", notes: "" },
+  });
 
   function addSessionLog(tableId, entry) {
     setTableSessionLogs(logs => ({ ...logs, [tableId]: [entry, ...(logs[tableId] || [])] }));
@@ -6896,10 +6987,12 @@ export default function CasinoOps() {
     if (inc.tableId) updateTable(inc.tableId, { status: "incident" });
   }
   function updateIncident(id, status) {
+    const inc = incidents.find(i => i.id === id);
     setIncidents(is => is.map(i => i.id === id ? {...i, status} : i));
     if (status === "resolved") {
       notify("Incident resolved", "✅", "var(--green)");
       addActivity("incident_resolved", `Incident ${id} closed`, "✅");
+      if (inc?.tableId) updateTable(inc.tableId, { status: "open" });
     }
   }
 
@@ -6949,7 +7042,8 @@ export default function CasinoOps() {
         const tbl = tables.find(t => t.id === fill.tableId);
         const fillAmt = fill.total || fill.amount || 0;
         if (tbl && fillAmt) {
-          updateTable(fill.tableId, { chipTotal: (tbl.chipTotal||0) + fillAmt });
+          const newStatus = tbl.status === "fill_required" ? "open" : tbl.status;
+          updateTable(fill.tableId, { chipTotal: (tbl.chipTotal||0) + fillAmt, status: newStatus });
           addActivity("fill_delivered", `Fill KES ${fillAmt.toLocaleString()} added to ${fill.tableId}`, "🪙");
           notify(`Fill delivered — ${fill.tableId} float updated`, "✅", "var(--green)");
           return; // notify already set
@@ -7094,17 +7188,17 @@ export default function CasinoOps() {
       case "tables":
         return <TablesPage tables={tables} halls={halls} staff={staff} onUpdateTable={updateTable} onOpenTableModal={() => {}} canEdit={canEditTables} chips={chips} />;
       case "staffing":
-        return <StaffingPage staff={staff} halls={halls} onUpdateStaff={updateStaff} attendanceLog={attendanceLog} onCheckIn={checkIn} onCheckOut={checkOut} userRole={user.role} rolePermissions={rolePermissions} />;
+        return <StaffingPage staff={staff} halls={halls} onUpdateStaff={updateStaff} attendanceLog={attendanceLog} onCheckIn={checkIn} onCheckOut={checkOut} userRole={user.role} rolePermissions={rolePermissions} shiftState={shiftState} />;
       case "shift_control":
         return <ShiftControlPage staff={staff} tables={tables} transactions={transactions} shiftState={shiftState} onOpenShift={openShift} onCloseShift={closeShift} shifts={shifts} />;
       case "breaklist":
-        return <BreakListPage staff={staff} tables={tables} user={user} halls={halls} onUpdateTable={updateTable} onAddIncident={addIncident} onAddFill={addFill} chips={chips} rolePermissions={rolePermissions} />;
+        return <BreakListPage staff={staff} tables={tables} user={user} halls={halls} onUpdateTable={updateTable} onAddIncident={addIncident} onAddFill={addFill} chips={chips} rolePermissions={rolePermissions} onNotify={notify} />;
       case "incidents":
         return <IncidentsPage incidents={incidents} user={user} tables={tables} onAddIncident={addIncident} onUpdateIncident={updateIncident} rolePermissions={rolePermissions} />;
       case "float_mgmt":
         return <FloatManagementPage tables={tables} chips={chips} fills={fills} houseFloat={houseFloat} onSetHouseFloat={setHouseFloat} onUpdateTable={updateTable} transactions={transactions} />;
       case "fills":
-        return <FillsPage fills={fills} tables={tables} user={user} chips={chips} onAddFill={addFill} onApproveFill={approveFill} onUpdateTable={updateTable} staff={staff} tableTransfers={tableTransfers} onAddTransfer={addTransfer} cageReserve={houseFloat - tables.reduce((s,t)=>s+(t.chipTotal||0),0)} onSetCageReserve={v => setHouseFloat(tables.reduce((s,t)=>s+(t.chipTotal||0),0) + v)} rolePermissions={rolePermissions} halls={halls} onAddChipCount={addChipCount} chipCountLog={chipCountLog} />;
+        return <FillsPage fills={fills} tables={tables} user={user} chips={chips} onAddFill={addFill} onApproveFill={approveFill} onUpdateTable={updateTable} staff={staff} tableTransfers={tableTransfers} onAddTransfer={addTransfer} cageReserve={houseFloat - tables.reduce((s,t)=>s+(t.chipTotal||0),0)} onSetCageReserve={v => setHouseFloat(tables.reduce((s,t)=>s+(t.chipTotal||0),0) + v)} rolePermissions={rolePermissions} halls={halls} onAddChipCount={addChipCount} chipCountLog={chipCountLog} casinoInfo={casinoInfo} />;
       case "reports":
         return <ReportsPage tables={tables} staff={staff} transactions={transactions} chipCountLog={chipCountLog} rolePermissions={rolePermissions} />;
       case "roster":
@@ -7124,6 +7218,8 @@ export default function CasinoOps() {
             shifts={shifts} onUpdateShift={updateShift}
             staff={staff}
             rolePermissions={rolePermissions} setRolePermissions={setRolePermissions}
+            casinoInfo={casinoInfo} setCasinoInfo={setCasinoInfo}
+            formTemplates={formTemplates} setFormTemplates={setFormTemplates}
           />
         );
       case "profile":
