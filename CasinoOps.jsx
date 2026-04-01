@@ -1,5 +1,23 @@
 import { useState, useEffect, useCallback } from "react";
 
+// ─── API HELPER ───────────────────────────────────────────────────────────────
+async function api(method, path, body) {
+  const token = localStorage.getItem("casinoops_token");
+  const res = await fetch(`/api${path}`, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(e.error || "API error");
+  }
+  return res.json();
+}
+
 // =============================================================================
 // CASINOPS V2 — COMPLETE BUILD
 // =============================================================================
@@ -4471,8 +4489,8 @@ function AdminPage({ users, onAddUser, onUpdateUser, onDeleteUser, halls, onAddH
     const [info, setInfo] = useState(casinoInfo);
     const [tpl, setTpl]   = useState(formTemplates[formsFormKey] || { customHeader:"", customFooter:"", notes:"" });
 
-    function saveInfo() { setCasinoInfo(info); }
-    function saveTpl()  { setFormTemplates(prev => ({ ...prev, [formsFormKey]: tpl })); }
+    function saveInfo() { setCasinoInfo(info); api("PATCH", "/settings/casino-info", info).catch(() => {}); }
+    function saveTpl()  { setFormTemplates(prev => ({ ...prev, [formsFormKey]: tpl })); api("PATCH", `/settings/form-template/${formsFormKey}`, tpl).catch(() => {}); }
 
     function downloadTemplate() {
       const content = [
@@ -4705,7 +4723,9 @@ function AdminPage({ users, onAddUser, onUpdateUser, onDeleteUser, halls, onAddH
       });
     }
     function save() {
+      const perms = [...selected].reduce((acc, k) => { acc[k] = true; return acc; }, {});
       setRolePermissions(rp => ({ ...rp, [role.id]: [...selected] }));
+      api("PUT", "/permissions", { role: role.id, permissions: perms }).catch(() => {});
       onClose();
     }
 
@@ -6661,13 +6681,23 @@ function LoginPage({ onLogin, users }) {
   const [error, setError] = useState("");
   const allUsers = users && users.length ? users : DEMO_USERS;
 
-  function handleLogin(e) {
+  async function handleLogin(e) {
     e?.preventDefault();
-    const n = name.trim().toLowerCase();
-    const e2 = empNo.trim().toUpperCase();
-    const user = allUsers.find(u => u.name.toLowerCase() === n && u.empNo.toUpperCase() === e2);
-    if (user) { onLogin(user); }
-    else { setError("Invalid name or employee number. Click an account below to auto-fill."); }
+    try {
+      const result = await api("POST", "/auth/login", {
+        name: name.trim(),
+        empNo: empNo.trim().toUpperCase(),
+      });
+      localStorage.setItem("casinoops_token", result.token);
+      onLogin(result.user);
+    } catch {
+      // Fallback to local demo user lookup if API unavailable
+      const n = name.trim().toLowerCase();
+      const e2 = empNo.trim().toUpperCase();
+      const user = allUsers.find(u => u.name.toLowerCase() === n && u.empNo.toUpperCase() === e2);
+      if (user) { onLogin(user); }
+      else { setError("Invalid name or employee number. Click an account below to auto-fill."); }
+    }
   }
 
   function quickLogin(u) { setName(u.name); setEmpNo(u.empNo); setError(""); }
@@ -6939,6 +6969,32 @@ export default function CasinoOps() {
     transfer: { customHeader: "", customFooter: "", notes: "" },
   });
 
+  // ── API STATE LOADER ──
+  useEffect(() => {
+    if (!user) return;
+    api("GET", "/state").then(data => {
+      if (data.tables)          setTables(data.tables);
+      if (data.staff)           setStaff(data.staff);
+      if (data.halls)           setHalls(data.halls);
+      if (data.chips)           setChips(data.chips);
+      if (data.shifts)          setShifts(data.shifts);
+      if (data.shiftState)      setShiftState(data.shiftState);
+      if (data.incidents)       setIncidents(data.incidents);
+      if (data.fills)           setFills(data.fills);
+      if (data.transactions)    setTransactions(data.transactions);
+      if (data.tableTransfers)  setTableTransfers(data.tableTransfers);
+      if (data.customers)       setCustomers(data.customers);
+      if (data.users)           setUsers(data.users);
+      if (data.activity)        setActivity(data.activity);
+      if (data.chipCountLog)    setChipCountLog(data.chipCountLog);
+      if (data.attendanceLog)   setAttendanceLog(data.attendanceLog);
+      if (data.houseFloat != null) setHouseFloat(data.houseFloat);
+      if (data.casinoInfo)      setCasinoInfo(data.casinoInfo);
+      if (data.formTemplates)   setFormTemplates(data.formTemplates);
+      if (data.rolePermissions) setRolePermissions(data.rolePermissions);
+    }).catch(err => console.warn("API unavailable, using local state:", err));
+  }, [user]);
+
   function addSessionLog(tableId, entry) {
     setTableSessionLogs(logs => ({ ...logs, [tableId]: [entry, ...(logs[tableId] || [])] }));
   }
@@ -6949,38 +7005,47 @@ export default function CasinoOps() {
 
   function addActivity(action, detail, icon) {
     const t = new Date().toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"});
-    setActivity(a => [{ id: Date.now(), time: t, action, detail, icon }, ...a.slice(0,19)]);
+    const entry = { id: Date.now(), time: t, action, detail, icon };
+    setActivity(a => [entry, ...a.slice(0,19)]);
+    api("POST", "/activity", { id: String(entry.id), action, detail, icon, time: t }).catch(() => {});
   }
 
   // ── TABLE HANDLERS ──
   function updateTable(id, changes) {
     setTables(ts => ts.map(t => t.id === id ? {...t,...changes} : t));
     addActivity("table_updated", `${id} updated`, "🃏");
+    api("PUT", `/tables/${id}`, changes).catch(() => {});
   }
   function addTable(tableData) {
     setTables(ts => [...ts, { dealerId: null, inspectorId: null, ...tableData }]);
     addActivity("table_created", `Table ${tableData.id} added`, "🃏");
     notify(`Table ${tableData.id} created`, "🃏");
+    api("POST", "/tables", tableData).catch(() => {});
   }
   function deleteTable(id) {
     setTables(ts => ts.filter(t => t.id !== id));
     notify(`Table ${id} deleted`, "🗑️", "var(--red)");
+    api("DELETE", `/tables/${id}`).catch(() => {});
   }
 
   // ── STAFF HANDLERS ──
   function updateStaff(id, changes) {
     setStaff(ss => ss.map(s => s.id === id ? {...s,...changes} : s));
+    api("PUT", `/staff/${id}`, changes).catch(() => {});
   }
   function deleteStaff(id) {
     setStaff(ss => ss.filter(s => s.id !== id));
     notify("Staff record removed", "🗑️", "var(--red)");
+    api("DELETE", `/staff/${id}`).catch(() => {});
   }
   function addStaff(staffData) {
     const uid = staffData._bulkIdx != null ? "s" + staffData._bulkIdx : "s" + Date.now();
     const { _bulkIdx, ...rest } = staffData;
-    setStaff(ss => [...ss, { id: uid, status: "checked_in", ...rest }]);
+    const newStaff = { id: uid, status: "checked_in", ...rest };
+    setStaff(ss => [...ss, newStaff]);
     addActivity("staff_added", staffData.name + " added", "👤");
     notify("Staff member added", "👤");
+    api("POST", "/staff", newStaff).catch(() => {});
   }
 
   // ── INCIDENT HANDLERS ──
@@ -6990,6 +7055,7 @@ export default function CasinoOps() {
     addActivity("incident_reported", `${inc.type} at ${inc.tableId}`, "⚠️");
     notify("Incident reported and logged", "⚠️", "var(--red)");
     if (inc.tableId) updateTable(inc.tableId, { status: "incident" });
+    api("POST", "/incidents", newInc).catch(() => {});
   }
   function updateIncident(id, status) {
     const inc = incidents.find(i => i.id === id);
@@ -6999,20 +7065,25 @@ export default function CasinoOps() {
       addActivity("incident_resolved", `Incident ${id} closed`, "✅");
       if (inc?.tableId) updateTable(inc.tableId, { status: "open" });
     }
+    api("PUT", `/incidents/${id}`, { status }).catch(() => {});
   }
 
   function addTransaction(tx) {
-    setTransactions(ts => [{ id: Date.now(), ...tx, time: new Date().toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"}) }, ...ts]);
+    const newTx = { id: "tx" + Date.now(), ...tx, time: new Date().toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"}) };
+    setTransactions(ts => [newTx, ...ts]);
     addActivity("customer_transaction", tx.type + " at " + tx.tableId, tx.type==="drop" ? "📥" : "📤");
+    api("POST", "/transactions", newTx).catch(() => {});
   }
   function updateTransaction(id, changes) {
     setTransactions(ts => ts.map(t => t.id === id ? {...t,...changes} : t));
     addActivity("transaction_edited", "Transaction " + id + " edited", "✏️");
+    api("PUT", `/transactions/${id}`, changes).catch(() => {});
   }
   function deleteTransaction(id) {
     setTransactions(ts => ts.filter(t => t.id !== id));
     addActivity("transaction_deleted", "Transaction removed", "🗑️");
     notify("Transaction deleted", "🗑️", "var(--red)");
+    api("DELETE", `/transactions/${id}`).catch(() => {});
   }
 
   // ── FILL HANDLERS ──
@@ -7021,6 +7092,7 @@ export default function CasinoOps() {
     setFills(f => [newFill, ...f]);
     addActivity("fill_requested", `Fill: ${fill.tableId}`, "🪙");
     notify("Fill request submitted to Shift Manager", "🪙", "var(--yellow)");
+    api("POST", "/fills", newFill).catch(() => {});
   }
   function approveFill(id, sigField) {
     setFills(fs => fs.map(f => {
@@ -7062,49 +7134,66 @@ export default function CasinoOps() {
     } else {
       notify("Signature recorded", "✒️");
     }
+    if (sigField) {
+      api("PATCH", `/fills/${id}/sign`, { sigField }).catch(() => {});
+    } else {
+      api("POST", `/fills/${id}/approve`).catch(() => {});
+    }
   }
 
   // ── USER HANDLERS ──
   function addUser(userData) {
-    setUsers(us => [...us, { id: "u" + Date.now(), ...userData, active: true }]);
+    const newUser = { id: "u" + Date.now(), ...userData, active: true };
+    setUsers(us => [...us, newUser]);
     addActivity("user_created", `${userData.name} added as ${userData.role}`, "👤");
     notify(`User ${userData.name} created`, "👤");
+    api("POST", "/users", newUser).catch(() => {});
   }
   function updateUser(userData) {
     setUsers(us => us.map(u => u.id === userData.id ? {...u,...userData} : u));
     notify(`User ${userData.name} updated`, "👤");
+    api("PUT", `/users/${userData.id}`, userData).catch(() => {});
   }
   function deleteUser(id) {
     setUsers(us => us.filter(u => u.id !== id));
     notify("User deleted", "🗑️", "var(--red)");
+    api("DELETE", `/users/${id}`).catch(() => {});
   }
 
   // ── HALL HANDLERS ──
   function addHall(hallData) {
-    setHalls(hs => [...hs, { id: "h" + Date.now(), ...hallData }]);
+    const newHall = { id: "h" + Date.now(), ...hallData };
+    setHalls(hs => [...hs, newHall]);
     notify(`Hall "${hallData.name}" created`, "🏛️");
+    api("POST", "/halls", newHall).catch(() => {});
   }
   function updateHall(hallData) {
     setHalls(hs => hs.map(h => h.id === hallData.id ? {...h,...hallData} : h));
     notify("Hall updated", "🏛️");
+    api("PUT", `/halls/${hallData.id}`, hallData).catch(() => {});
   }
   function deleteHall(id) {
     setHalls(hs => hs.filter(h => h.id !== id));
     notify("Hall deleted", "🗑️", "var(--red)");
+    api("DELETE", `/halls/${id}`).catch(() => {});
   }
 
   // ── CHIP HANDLERS ──
   function addChip(chipData) {
-    setChips(cs => [...cs, { id: "c" + Date.now(), ...chipData }]);
+    const newChip = { id: "c" + Date.now(), ...chipData };
+    setChips(cs => [...cs, newChip]);
     notify(`${chipData.color} denomination added`, "🎰");
+    api("POST", "/chips", newChip).catch(() => {});
   }
   function updateChip(chipData) {
     setChips(cs => cs.map(c => c.id === chipData.id ? {...c,...chipData} : c));
     notify(`${chipData.color} denomination updated`, "🎰");
+    api("PUT", `/chips/${chipData.id}`, chipData).catch(() => {});
   }
   function deleteChip(id) {
     setChips(cs => cs.filter(c => c.id !== id));
     notify("Denomination deleted", "🗑️", "var(--red)");
+    api("DELETE", `/chips/${id}`).catch(() => {});
   }
 
   // ── SHIFT HANDLER ──
@@ -7112,11 +7201,13 @@ export default function CasinoOps() {
     setTableTransfers(ts => [transfer, ...ts]);
     addActivity("table_transfer", `Transfer ${transfer.fromTable}→${transfer.toTable} — ${(transfer.fromTotal||0).toLocaleString()}`, "↔");
     notify("Table-to-table transfer logged", "↔");
+    api("POST", "/transfers", transfer).catch(() => {});
   }
 
   function updateShift(shiftData) {
     setShifts(ss => ss.map(s => s.id === shiftData.id ? {...s,...shiftData} : s));
     notify(`${shiftData.name} shift updated`, "⏰");
+    api("PUT", `/shifts/${shiftData.id}`, shiftData).catch(() => {});
   }
 
   function openShift(type, shiftDate) {
@@ -7125,6 +7216,7 @@ export default function CasinoOps() {
     setShiftState(ss => ({ ...ss, status:"open", type, openedAt: now, openedDate: date, openedBy: "Shift Manager" }));
     addActivity("shift_opened", `${type} shift opened — ${date}`, "🔑");
     notify(`${type} shift opened`, "🔑", "var(--green)");
+    api("POST", "/shifts/state/open", { type, openedAt: now, openedDate: date, openedBy: "Shift Manager" }).catch(() => {});
   }
 
   function closeShift({ drop, win, net, staffCount }) {
@@ -7149,28 +7241,31 @@ export default function CasinoOps() {
     // Reset all table floats to capacity for next day
     setTables(ts => ts.map(t => ({ ...t, chipTotal: t.floatCapacity || 0, openingFloat: 0, openedAt: null, openedDate: null, chipBreakdown: null })));
     addActivity("shift_closed", `Shift closed — Net: ${fmt(net)}`, "🔒");
+    api("POST", "/shifts/state/close", { drop, win, net, staffCount, tableSnapshot, closedAt: now }).catch(() => {});
     notify("Shift closed — table floats reset for next day", "🔒", "var(--blue)");
   }
 
   function addChipCount({ tableId, prevFloat, newFloat, diff, inspector }) {
     const t = new Date().toLocaleTimeString("en-KE", { hour: "2-digit", minute: "2-digit" });
-    setChipCountLog(log => [
-      { id: Date.now(), tableId, prevFloat, newFloat, diff, inspector, time: t },
-      ...log.slice(0, 99)
-    ]);
+    const entry = { id: Date.now(), tableId, prevFloat, newFloat, diff, inspector, time: t };
+    setChipCountLog(log => [entry, ...log.slice(0, 99)]);
     addActivity("chip_count", `Chip count: ${tableId} — ${diff >= 0 ? "+" : ""}${fmt(diff)}`, "📊");
+    api("POST", "/chip-counts", { id: String(entry.id), tableId, prevFloat, newFloat, diff, inspector, time: t }).catch(() => {});
   }
 
   function checkIn(staffId, shift) {
     const now = new Date().toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"});
-    setAttendanceLog(al => [...al, { id: Date.now(), staffId, shift, checkIn: now, checkOut: null }]);
+    const entry = { id: Date.now(), staffId, shift, checkIn: now, checkOut: null };
+    setAttendanceLog(al => [...al, entry]);
     addActivity("check_in", `Staff checked in — ${shift} shift`, "✓");
+    api("POST", "/attendance/check-in", { id: String(entry.id), staffId, shift, checkIn: now }).catch(() => {});
   }
 
   function checkOut(staffId, shift) {
     const now = new Date().toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"});
     setAttendanceLog(al => al.map(l => l.staffId===staffId && l.shift===shift && !l.checkOut ? {...l, checkOut: now} : l));
     addActivity("check_out", `Staff checked out — ${shift} shift`, "✗");
+    api("POST", "/attendance/check-out", { staffId, shift, checkOut: now }).catch(() => {});
   }
 
   const nav = ROLE_NAV[user?.role] || [];
@@ -7201,9 +7296,9 @@ export default function CasinoOps() {
       case "incidents":
         return <IncidentsPage incidents={incidents} user={user} tables={tables} onAddIncident={addIncident} onUpdateIncident={updateIncident} rolePermissions={rolePermissions} />;
       case "float_mgmt":
-        return <FloatManagementPage tables={tables} chips={chips} fills={fills} houseFloat={houseFloat} onSetHouseFloat={setHouseFloat} onUpdateTable={updateTable} transactions={transactions} />;
+        return <FloatManagementPage tables={tables} chips={chips} fills={fills} houseFloat={houseFloat} onSetHouseFloat={v => { setHouseFloat(v); api("PATCH", "/settings/house-float", { amount: v }).catch(() => {}); }} onUpdateTable={updateTable} transactions={transactions} />;
       case "fills":
-        return <FillsPage fills={fills} tables={tables} user={user} chips={chips} onAddFill={addFill} onApproveFill={approveFill} onUpdateTable={updateTable} staff={staff} tableTransfers={tableTransfers} onAddTransfer={addTransfer} cageReserve={houseFloat - tables.reduce((s,t)=>s+(t.chipTotal||0),0)} onSetCageReserve={v => setHouseFloat(tables.reduce((s,t)=>s+(t.chipTotal||0),0) + v)} rolePermissions={rolePermissions} halls={halls} onAddChipCount={addChipCount} chipCountLog={chipCountLog} casinoInfo={casinoInfo} />;
+        return <FillsPage fills={fills} tables={tables} user={user} chips={chips} onAddFill={addFill} onApproveFill={approveFill} onUpdateTable={updateTable} staff={staff} tableTransfers={tableTransfers} onAddTransfer={addTransfer} cageReserve={houseFloat - tables.reduce((s,t)=>s+(t.chipTotal||0),0)} onSetCageReserve={v => { const total = tables.reduce((s,t)=>s+(t.chipTotal||0),0) + v; setHouseFloat(total); api("PATCH", "/settings/house-float", { amount: total }).catch(() => {}); }} rolePermissions={rolePermissions} halls={halls} onAddChipCount={addChipCount} chipCountLog={chipCountLog} casinoInfo={casinoInfo} />;
       case "reports":
         return <ReportsPage tables={tables} staff={staff} transactions={transactions} chipCountLog={chipCountLog} rolePermissions={rolePermissions} />;
       case "roster":
@@ -7277,7 +7372,7 @@ export default function CasinoOps() {
             {showUserMenu && (
               <div className="user-menu">
                 <div className="user-menu-item" onClick={() => { setPage("profile"); setShowUserMenu(false); }}>👤 My Profile</div>
-                <div className="user-menu-item danger" onClick={() => { setUser(null); setPage("dashboard"); setShowUserMenu(false); }}>🚪 Logout</div>
+                <div className="user-menu-item danger" onClick={() => { localStorage.removeItem("casinoops_token"); setUser(null); setPage("dashboard"); setShowUserMenu(false); }}>🚪 Logout</div>
               </div>
             )}
             <div className="sidebar-user" onClick={e => { e.stopPropagation(); setShowUserMenu(m => !m); }}>

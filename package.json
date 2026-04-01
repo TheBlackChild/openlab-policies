@@ -1,7 +1,30 @@
 {
+  "name": "casinoops",
+  "version": "2.0.0",
+  "description": "CasinoOps V2 — Casino Operations Management System",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js",
+    "migrate": "node server/migrate.js",
+    "seed": "node server/seed.js",
+    "build": "npx esbuild CasinoOps.jsx --bundle --minify --jsx=automatic --outfile=bundle.js && node scripts/assemble.js",
+    "setup": "npm install && npm run migrate && npm run seed"
+  },
   "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.12.0"
+  },
+  "devDependencies": {
     "esbuild": "^0.27.4",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
