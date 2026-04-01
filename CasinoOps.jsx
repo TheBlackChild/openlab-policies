@@ -1061,9 +1061,11 @@ function StaffingPage({ staff, halls, onUpdateStaff, attendanceLog, onCheckIn, o
 
   // ── ATTENDANCE TAB ──────────────────────────────────────────────────────────
   function AttendanceTab() {
-    // Default to the currently open shift type; fall back to "Night"
-    const openShiftType = shiftState?.status === "open" ? (shiftState.type || "Night") : "Night";
-    const [shiftType, setShiftType] = useState(openShiftType);
+    const shiftOpen = shiftState?.status === "open";
+    // When a shift is open, lock to that shift's type; otherwise let manager pick
+    const activeShiftType = shiftOpen ? (shiftState.type || "Night") : null;
+    const [manualShiftType, setManualShiftType] = useState("Night");
+    const shiftType = activeShiftType || manualShiftType;
     const [searchName, setSearchName] = useState("");
     const [rosterOnly, setRosterOnly] = useState(true);
 
@@ -1090,23 +1092,26 @@ function StaffingPage({ staff, halls, onUpdateStaff, attendanceLog, onCheckIn, o
             <input className="form-input" placeholder="Search staff name..." value={searchName} onChange={e => setSearchName(e.target.value)} style={{ padding: "7px 12px" }} />
           </div>
           <div style={{ display:"flex", gap:6, alignItems:"center" }}>
-            {["Morning","Day","Night"].map(s => (
-              <button key={s} className={`btn btn-xs ${shiftType===s?"btn-gold":"btn-outline"}`} onClick={() => setShiftType(s)}>{s}</button>
-            ))}
+            {shiftOpen
+              ? <span style={{ fontSize:11, padding:"4px 10px", background:"var(--gold-dim)", border:"1px solid var(--gold)", borderRadius:"var(--radius)", color:"var(--gold)", fontWeight:600 }}>🔒 {shiftType} Shift (active)</span>
+              : ["Morning","Day","Night"].map(s => (
+                  <button key={s} className={`btn btn-xs ${shiftType===s?"btn-gold":"btn-outline"}`} onClick={() => setManualShiftType(s)}>{s}</button>
+                ))
+            }
             <button className={`btn btn-xs ${rosterOnly?"btn-blue":"btn-outline"}`} onClick={() => setRosterOnly(r => !r)} title="Toggle roster filter">
               {rosterOnly ? "📋 Roster" : "👥 All"}
             </button>
           </div>
         </div>
 
-        {shiftState?.status !== "open" && (
+        {!shiftOpen && (
           <div style={{ marginBottom:12, padding:"8px 12px", background:"var(--yellow-dim)", border:"1px solid var(--yellow)", borderRadius:"var(--radius)", fontSize:12, color:"var(--yellow)" }}>
-            ⚠ No shift currently open. Open a shift in Shift Control first. Showing {shiftType} Shift roster.
+            ⚠ No shift currently open. Open a shift in Shift Control to auto-load the roster. Showing <strong>{shiftType}</strong> Shift roster for preview.
           </div>
         )}
-        {shiftState?.status === "open" && shiftState.type !== shiftType && (
-          <div style={{ marginBottom:12, padding:"8px 12px", background:"var(--blue-dim)", border:"1px solid var(--blue)", borderRadius:"var(--radius)", fontSize:12, color:"var(--blue)" }}>
-            ℹ Viewing {shiftType} roster. The open shift is <strong>{shiftState.type}</strong>.
+        {shiftOpen && (
+          <div style={{ marginBottom:12, padding:"8px 12px", background:"var(--green-dim)", border:"1px solid var(--green)", borderRadius:"var(--radius)", fontSize:12, color:"var(--green)" }}>
+            ✅ <strong>{shiftType} Shift</strong> is open. Roster auto-loaded — {scheduledIds.size} staff scheduled for this shift.
           </div>
         )}
 
